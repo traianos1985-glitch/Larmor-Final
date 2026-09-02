@@ -370,5 +370,246 @@ export const SOIL_TYPES: SoilType[] = [
 export const REFRACTION_SOILS = [
   { value: "4|0.001", label: "Ξηρό / Αμμώδες — ε_r=4, σ=0.001 S/m", eps: 4, sigma: 0.001 },
   { value: "10|0.01", label: "Μέσο / Μικτό — ε_r=10, σ=0.01 S/m", eps: 10, sigma: 0.01 },
-  { value: "25|0.05", label: "Υγρό / Αργιλώδ��ς — ε_r=25, σ=0.05 S/m", eps: 25, sigma: 0.05 },
+  { value: "25|0.05", label: "Υγρό / Αργιλώδης — ε_r=25, σ=0.05 S/m", eps: 25, sigma: 0.05 },
 ]
+
+/* ============================================================
+   PRESETS — γρήγορες προεπιλογές υλικού + εδάφους
+   Κάθε preset ρυθμίζει ταυτόχρονα υλικό-στόχο, αγωγιμότητα εδάφους
+   (section 3), διηλεκτρικό έδαφος διάθλασης (section 6) και εκτ. βάθος.
+============================================================ */
+export interface Preset {
+  id: string
+  label: string
+  desc: string
+  materialId: string
+  /** value που αντιστοιχεί σε SOIL_TYPES */
+  soilType: string
+  /** value που αντιστοιχεί σε REFRACTION_SOILS */
+  refractionSoil: string
+  /** εκτιμώμενο βάθος στόχου (m) */
+  depth: number
+}
+
+export const PRESETS: Preset[] = [
+  {
+    id: "gold-dry-sandy",
+    label: "Χρυσός · ξηρό αμμώδες",
+    desc: "Ρηχό κειμήλιο Au σε ξηρό/αμμώδες έδαφος",
+    materialId: "au197",
+    soilType: "0.001",
+    refractionSoil: "4|0.001",
+    depth: 1.0,
+  },
+  {
+    id: "silver-medium",
+    label: "Άργυρος · μέτριο έδαφος",
+    desc: "Ag σε μέτρια υγρό, μικτό έδαφος",
+    materialId: "ag109",
+    soilType: "0.01",
+    refractionSoil: "10|0.01",
+    depth: 1.5,
+  },
+  {
+    id: "copper-medium",
+    label: "Χαλκός · μέτριο έδαφος",
+    desc: "Cu σε μέτρια υγρό έδαφος",
+    materialId: "cu63",
+    soilType: "0.01",
+    refractionSoil: "10|0.01",
+    depth: 1.0,
+  },
+  {
+    id: "iron-wet-clay",
+    label: "Σίδηρος · υγρό αργιλώδες",
+    desc: "Σιδηρομαγνητικός στόχος σε υγρό/αργιλώδες",
+    materialId: "fe57",
+    soilType: "0.05",
+    refractionSoil: "25|0.05",
+    depth: 2.0,
+  },
+  {
+    id: "gold-rocky-deep",
+    label: "Χρυσός · βραχώδες / βαθύ",
+    desc: "Au σε ξηρό βραχώδες, μεγαλύτερο βάθος",
+    materialId: "au197",
+    soilType: "0.0001",
+    refractionSoil: "4|0.001",
+    depth: 3.0,
+  },
+]
+
+export function getPreset(id: string): Preset | undefined {
+  return PRESETS.find((p) => p.id === id)
+}
+
+/* ============================================================
+   VALIDATION — έλεγχοι εγκυρότητας τιμών εισόδου
+   Επιστρέφει μήνυμα σφάλματος (string) ή null αν η τιμή είναι έγκυρη.
+============================================================ */
+export function validateLat(v: number): string | null {
+  if (!Number.isFinite(v)) return "Μη έγκυρη τιμή"
+  if (v < -90 || v > 90) return "Εκτός ορίων (±90°)"
+  return null
+}
+export function validateLon(v: number): string | null {
+  if (!Number.isFinite(v)) return "Μη έγκυρη τιμή"
+  if (v < -180 || v > 180) return "Εκτός ορίων (±180°)"
+  return null
+}
+export function validateBfield(v: number): string | null {
+  if (!Number.isFinite(v)) return "Μη έγκυρη τιμή"
+  if (v <= 0) return "Πρέπει να είναι > 0"
+  if (v > 100) return "Μη ρεαλιστικό (> 100 µT)"
+  if (v < 20 || v > 70) return "Εκτός τυπικού γήινου εύρους (20–70 µT)"
+  return null
+}
+export function validateDepth(v: number): string | null {
+  if (!Number.isFinite(v)) return "Μη έγκυρη τιμή"
+  if (v <= 0) return "Πρέπει να είναι > 0"
+  if (v > 50) return "Μη ρεαλιστικό βάθος (> 50 m)"
+  return null
+}
+export function validateSigma(v: number): string | null {
+  if (!Number.isFinite(v)) return "Μη έγκυρη τιμή"
+  if (v <= 0) return "Πρέπει να είναι > 0"
+  if (v > 10) return "Μη ρεαλιστική αγωγιμότητα (> 10 S/m)"
+  return null
+}
+
+/* ============================================================
+   ΠΟΙΟΤΗΤΑ ΜΕΤΡΗΣΗΣ — διαφανείς, φυσικά θεμελιωμένοι δείκτες
+   Αντικαθιστά το παλιό ευριστικό «confidence = 72 − απόσταση…».
+   Κάθε δείκτης προκύπτει από μετρήσιμο φυσικό μέγεθος και έχει
+   ρητό βάρος. Το συνολικό score είναι το σταθμισμένο άθροισμα.
+============================================================ */
+export type QualityStatus = "good" | "moderate" | "poor"
+
+export interface QualityFactor {
+  key: string
+  label: string
+  detail: string
+  status: QualityStatus
+  /** επιμέρους βαθμός 0..1 */
+  score: number
+  /** βάρος στο συνολικό (αθροίζουν σε 1) */
+  weight: number
+}
+
+export interface MeasurementQuality {
+  /** συνολικός δείκτης 0..100 */
+  score: number
+  grade: "Υψηλή" | "Μέτρια" | "Χαμηλή"
+  factors: QualityFactor[]
+}
+
+function clamp01(x: number): number {
+  return Math.max(0, Math.min(1, x))
+}
+function statusFrom(score: number): QualityStatus {
+  return score >= 0.66 ? "good" : score >= 0.33 ? "moderate" : "poor"
+}
+
+export function computeMeasurementQuality(input: {
+  /** εφαπτομένη απωλειών (loss tangent) στη συχνότητα εκπομπής */
+  lossTangent: number
+  /** ολική εσωτερική ανάκλαση στη διεπαφή; ακυρώνει το drift vector */
+  isTIR: boolean
+  /** πλάτος σήματος στο βάθος στόχου, 0..100 % (skin depth εδάφους) */
+  soilAmplitudePct: number
+  /** απόκριση στόχου 1 − e^(−t/δ_metal), 0..1 */
+  metalResponse: number
+  /** εξασθένηση κατά μήκος διαδρομής (dB, αρνητικό) */
+  attenuationDb: number
+  /** απόσταση γεννήτριας–παρατηρούμενου σημείου (km) */
+  distanceKm: number
+  /** πηγή γεωμαγνητικού πεδίου (NOAA WMM = live, dipole = εκτίμηση) */
+  bSource: string
+}): MeasurementQuality {
+  // 1) Εγκυρότητα μοντέλου διάθλασης: low-loss (tan δ < 0.3) → ο μιγαδικός n είναι αξιόπιστος
+  const lt = Number.isFinite(input.lossTangent) ? Math.max(0, input.lossTangent) : 1
+  const modelScore = clamp01(1 - lt / 0.5)
+
+  // 2) Γεωμετρία διάθλασης: ΟΕΑ σημαίνει ότι το drift vector δεν υπολογίζεται
+  const refractionScore = input.isTIR ? 0 : 1
+
+  // 3) Διείσδυση στο έδαφος: πλάτος σήματος στο βάθος στόχου
+  const penetrationScore = clamp01((Number.isFinite(input.soilAmplitudePct) ? input.soilAmplitudePct : 0) / 100)
+
+  // 4) Απόκριση στόχου: πόσο συμμετέχει ο όγκος του μετάλλου
+  const responseScore = clamp01(Number.isFinite(input.metalResponse) ? input.metalResponse : 0)
+
+  // 5) Εξασθένηση διαδρομής: 0 dB → 1, −60 dB → 0
+  const atten = Number.isFinite(input.attenuationDb) ? input.attenuationDb : -120
+  const attenScore = clamp01((atten + 60) / 60)
+
+  // 6) Χωρική ακρίβεια: κοντινό παρατηρούμενο σημείο → πιο αξιόπιστη εκτίμηση
+  const distScore = clamp01(1 - (Number.isFinite(input.distanceKm) ? input.distanceKm : 5) / 2)
+
+  // 7) Πηγή πεδίου: live NOAA WMM > offline dipole
+  const isLive = /noaa|wmm/i.test(input.bSource || "")
+  const sourceScore = isLive ? 1 : 0.55
+
+  const factors: QualityFactor[] = [
+    {
+      key: "model",
+      label: "Εγκυρότητα μοντέλου (tan δ)",
+      detail: `tan δ = ${lt.toFixed(3)}${lt < 0.3 ? " · low-loss (έγκυρο)" : " · high-loss (προσεγγιστικό)"}`,
+      status: statusFrom(modelScore),
+      score: modelScore,
+      weight: 0.18,
+    },
+    {
+      key: "refraction",
+      label: "Γεωμετρία διάθλασης",
+      detail: input.isTIR ? "Ολική εσωτερική ανάκλαση — drift μη υπολογίσιμο" : "Χωρίς ΟΕΑ — drift vector έγκυρο",
+      status: statusFrom(refractionScore),
+      score: refractionScore,
+      weight: 0.18,
+    },
+    {
+      key: "penetration",
+      label: "Διείσδυση στο βάθος στόχου",
+      detail: `Πλάτος σήματος ≈ ${(Number.isFinite(input.soilAmplitudePct) ? input.soilAmplitudePct : 0).toFixed(1)}%`,
+      status: statusFrom(penetrationScore),
+      score: penetrationScore,
+      weight: 0.2,
+    },
+    {
+      key: "response",
+      label: "Απόκριση στόχου (skin effect)",
+      detail: `1 − e^(−t/δ) = ${(responseScore * 100).toFixed(0)}%`,
+      status: statusFrom(responseScore),
+      score: responseScore,
+      weight: 0.16,
+    },
+    {
+      key: "attenuation",
+      label: "Εξασθένηση διαδρομής",
+      detail: `${atten.toFixed(1)} dB`,
+      status: statusFrom(attenScore),
+      score: attenScore,
+      weight: 0.14,
+    },
+    {
+      key: "distance",
+      label: "Χωρική ακρίβεια",
+      detail: `${(Number.isFinite(input.distanceKm) ? input.distanceKm : 0).toFixed(3)} km γεννήτρια→σημείο`,
+      status: statusFrom(distScore),
+      score: distScore,
+      weight: 0.06,
+    },
+    {
+      key: "source",
+      label: "Πηγή γεωμαγνητικού πεδίου",
+      detail: isLive ? "NOAA WMM (live)" : "Offline dipole (εκτίμηση)",
+      status: isLive ? "good" : "moderate",
+      score: sourceScore,
+      weight: 0.08,
+    },
+  ]
+
+  const score = 100 * factors.reduce((acc, f) => acc + f.weight * f.score, 0)
+  const grade: MeasurementQuality["grade"] = score >= 70 ? "Υψηλή" : score >= 45 ? "Μέτρια" : "Χαμηλή"
+  return { score, grade, factors }
+}

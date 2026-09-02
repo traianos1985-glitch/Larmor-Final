@@ -35,7 +35,10 @@ export interface Measurement {
   target_lon: number
   target_bearing_deg: number
   target_distance_km: number
+  /** συνολικός δείκτης ποιότητας μέτρησης 0..100 (αντικαθιστά το παλιό confidence) */
   target_confidence: number
+  /** ποιοτική βαθμίδα: Υψηλή / Μέτρια / Χαμηλή */
+  target_quality_grade?: string
   notes: string
 }
 
@@ -161,7 +164,7 @@ export function HistoryPanel({
   const CSV_HEADER =
     "Περιοχή,Lat,Lon,Ημερομηνία,Υλικό,f0_Hz,n,Συχνότητα_Hz,Drift_m,Άξονας,Κατεύθυνση,Βάθος_m," +
     "Γεννήτρια_Lat,Γεννήτρια_Lon,Γεννήτρια_Συχνότητα_Hz,Γεννήτρια_Ζώνη," +
-    "Στόχος_Lat,Στόχος_Lon,Στόχος_Διόπτευση_deg,Στόχος_Απόσταση_km,Στόχος_Εμπιστοσύνη_%,Σημειώσεις"
+    "Στόχος_Lat,Στόχος_Lon,Στόχος_Διόπτευση_deg,Στόχος_Απόσταση_km,Ποιότητα_%,Βαθμίδα_Ποιότητας,Σημειώσεις"
 
   function measurementRow(area: Area, m: Measurement): string {
     return [
@@ -186,6 +189,7 @@ export function HistoryPanel({
       m.target_bearing_deg,
       m.target_distance_km,
       m.target_confidence,
+      `"${m.target_quality_grade || ""}"`,
       `"${m.notes || ""}"`,
     ].join(",")
   }
