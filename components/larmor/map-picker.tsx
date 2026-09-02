@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { CircleMarker, LayersControl, MapContainer, TileLayer, useMap, useMapEvents } from "react-leaflet"
 import type { LatLngExpression } from "leaflet"
 
@@ -16,12 +16,16 @@ function Recenter({ lat, lon }: { lat: number; lon: number }) {
 }
 
 // Παρακολουθεί το κέντρο και το zoom του χάρτη για το σταυρόνημα ακριβούς τοποθέτησης.
+// Το onChange κρατιέται σε ref ώστε το effect αρχικοποίησης να τρέχει μόνο στο mount
+// και να μην δημιουργείται βρόχος επανασχεδίασης (setState → νέο onChange → effect → …).
 function CenterTracker({ onChange }: { onChange: (lat: number, lon: number, zoom: number) => void }) {
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
   const map = useMapEvents({
-    move() { const c = map.getCenter(); onChange(c.lat, c.lng, map.getZoom()) },
-    zoom() { const c = map.getCenter(); onChange(c.lat, c.lng, map.getZoom()) },
+    move() { const c = map.getCenter(); onChangeRef.current(c.lat, c.lng, map.getZoom()) },
+    zoom() { const c = map.getCenter(); onChangeRef.current(c.lat, c.lng, map.getZoom()) },
   })
-  useEffect(() => { const c = map.getCenter(); onChange(c.lat, c.lng, map.getZoom()) }, [map, onChange])
+  useEffect(() => { const c = map.getCenter(); onChangeRef.current(c.lat, c.lng, map.getZoom()) }, [map])
   return null
 }
 
