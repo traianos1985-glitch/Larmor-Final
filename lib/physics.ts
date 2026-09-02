@@ -274,6 +274,131 @@ export function distanceAndBearingKm(lat1: number, lon1: number, lat2: number, l
   return { distanceKm, bearingDeg: (toDeg(Math.atan2(y, x)) + 360) % 360 }
 }
 
+/** Προορισμός από αρχικό σημείο, αζιμούθιο (° από Βορρά, δεξιόστροφα) και απόσταση (km).
+ *  Χρησιμοποιεί great-circle (spherical) — αρκετά ακριβές για κλίμακες πεδίου. */
+export function destinationPoint(lat: number, lon: number, bearingDeg: number, distanceKm: number): { lat: number; lon: number } {
+  const toRad = (d: number) => (d * Math.PI) / 180
+  const toDeg = (r: number) => (r * 180) / Math.PI
+  const R = 6371 // km
+  const delta = distanceKm / R
+  const theta = toRad(bearingDeg)
+  const phi1 = toRad(lat)
+  const lambda1 = toRad(lon)
+  const sinPhi2 = Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta)
+  const phi2 = Math.asin(Math.max(-1, Math.min(1, sinPhi2)))
+  const y = Math.sin(theta) * Math.sin(delta) * Math.cos(phi1)
+  const x = Math.cos(delta) - Math.sin(phi1) * sinPhi2
+  const lambda2 = lambda1 + Math.atan2(y, x)
+  return { lat: toDeg(phi2), lon: (((toDeg(lambda2) + 540) % 360) - 180) }
+}
+
+/* ============================================================
+   ΤΡΙΓΩΝΙΣΜΟΣ — Σύγκλιση πολλαπλών διοπτεύσεων (bearing lines)
+   Κάθε «παρατήρηση» = θέση γεννήτριας + αζιμούθιο προς τον στόχο.
+   Η τομή δύο ή περισσότερων ημιευθειών δίνει πολύ πιο αξιόπιστη
+   εκτίμηση θέσης στόχου από μία μόνο μέτρηση.
+
+   Μέθοδος: προβολή όλων των σημείων σε τοπικό επίπεδο ENU (μέτρα)
+   γύρω από το μέσο σημείο, λύση ελαχίστων τετραγώνων για την τομή
+   (ελαχιστοποίηση αθροίσματος τετραγώνων καθέτων αποστάσεων), και
+   επιστροφή σε lat/lon. Η αβεβαιότητα (±m) προκύπτει από τα residuals.
+============================================================ */
+export interface Sighting {
+  id: string
+  lat: number
+  lon: number
+  /** αζιμούθιο προς τον στόχο, ° από Βορρά (δεξιόστροφα) */
+  bearingDeg: number
+}
+
+export interface TriangulationResult {
+  lat: number
+  lon: number
+  /** RMS κάθετη απόσταση των ημιευθειών από τη λύση (μέτρα) → ακτίνα αβεβαιότητας */
+  uncertaintyM: number
+  /** ελάχιστη γωνία τομής μεταξύ ζευγών διοπτεύσεων (°) — δείκτης γεωμετρίας */
+  minAngleDeg: number
+  /** πόσες διοπτεύσεις «κοιτούν» πρ��ς τη λύση (t>0) — οι υπόλοιπες είναι ανάστροφες */
+  forwardCount: number
+  /** συνολικός αριθμός έγκυρων διοπτεύσεων που χρησιμοποιήθηκαν */
+  used: number
+  /** ποιοτικός χαρακτηρισμός γεωμετρίας/σύγκλισης */
+  ok: boolean
+}
+
+export function triangulateBearings(sightings: Sighting[]): TriangulationResult | null {
+  const valid = sightings.filter(
+    (s) => Number.isFinite(s.lat) && Number.isFinite(s.lon) && Number.isFinite(s.bearingDeg),
+  )
+  if (valid.length < 2) return null
+
+  const R = 6371000 // m
+  const toRad = (d: number) => (d * Math.PI) / 180
+  const lat0 = valid.reduce((a, s) => a + s.lat, 0) / valid.length
+  const lon0 = valid.reduce((a, s) => a + s.lon, 0) / valid.length
+  const cosLat0 = Math.cos(toRad(lat0))
+
+  // Τοπικές συντεταγμένες ENU (μέτρα) + μοναδιαία διανύσματα κατεύθυνσης.
+  const lines = valid.map((s) => {
+    const x = toRad(s.lon - lon0) * R * cosLat0 // east
+    const y = toRad(s.lat - lat0) * R // north
+    const th = toRad(s.bearingDeg)
+    // αζιμούθιο από Βορρά, δεξιόστροφα: east=sin, north=cos
+    const dx = Math.sin(th)
+    const dy = Math.cos(th)
+    return { px: x, py: y, dx, dy }
+  })
+
+  // Κανονικές εξισώσεις: Σ (I − d dᵀ) x = Σ (I − d dᵀ) p
+  let a11 = 0, a12 = 0, a22 = 0, b1 = 0, b2 = 0
+  for (const L of lines) {
+    const nxx = 1 - L.dx * L.dx
+    const nxy = -L.dx * L.dy
+    const nyy = 1 - L.dy * L.dy
+    a11 += nxx
+    a12 += nxy
+    a22 += nyy
+    b1 += nxx * L.px + nxy * L.py
+    b2 += nxy * L.px + nyy * L.py
+  }
+  const det = a11 * a22 - a12 * a12
+  if (Math.abs(det) < 1e-9) return null // σχεδόν παράλληλες → αδύνατη τομή
+
+  const sx = (a22 * b1 - a12 * b2) / det
+  const sy = (a11 * b2 - a12 * b1) / det
+
+  // Residuals: κάθετη απόσταση κάθε ημιευθείας από τη λύση + forward check (t>0).
+  let sumSq = 0
+  let forwardCount = 0
+  for (const L of lines) {
+    const rx = sx - L.px
+    const ry = sy - L.py
+    const t = rx * L.dx + ry * L.dy // προβολή στη διεύθυνση
+    if (t > 0) forwardCount++
+    const perp = rx * (-L.dy) + ry * L.dx // κάθετη συνιστώσα
+    sumSq += perp * perp
+  }
+  const uncertaintyM = Math.sqrt(sumSq / lines.length)
+
+  // Ελάχιστη γωνία τομής μεταξύ ζευγών (δείκτης γεωμετρίας).
+  let minAngleDeg = 180
+  for (let i = 0; i < lines.length; i++) {
+    for (let j = i + 1; j < lines.length; j++) {
+      const dot = lines[i].dx * lines[j].dx + lines[i].dy * lines[j].dy
+      let ang = (Math.acos(Math.max(-1, Math.min(1, Math.abs(dot)))) * 180) / Math.PI
+      // Χρησιμοποιούμε |dot| ώστε 170° να μετρά ως 10° (κακή γεωμετρία).
+      ang = Math.min(ang, 180 - ang)
+      if (ang < minAngleDeg) minAngleDeg = ang
+    }
+  }
+
+  const lat = lat0 + (sy / R) * (180 / Math.PI)
+  const lon = lon0 + (sx / (R * cosLat0)) * (180 / Math.PI)
+  const ok = forwardCount === lines.length && minAngleDeg >= 15 && uncertaintyM < 500
+
+  return { lat, lon, uncertaintyM, minAngleDeg, forwardCount, used: lines.length, ok }
+}
+
 export function computeDipoleInclination(latDeg: number, lonDeg: number): number {
   const toRad = (d: number) => (d * Math.PI) / 180
   const phi0 = toRad(GEOMAG_POLE.lat)

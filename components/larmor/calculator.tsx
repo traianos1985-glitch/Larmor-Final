@@ -34,6 +34,7 @@ import {
   validateDepth,
   validateSigma,
   type DipoleAxis,
+  type Sighting,
 } from "@/lib/physics"
 import { Crosshair } from "lucide-react"
 import { Panel, Field, Readout, inputClass, selectClass, buttonClass } from "./primitives"
@@ -42,6 +43,7 @@ import { SkinDepthChart } from "./skin-depth-chart"
 import { Compass, RayDiagram } from "./drift-visuals"
 import { LocationPanel, type GeomagResult } from "./location-panel"
 import { HistoryPanel, type Measurement } from "./history-panel"
+import { TriangulationPanel } from "./triangulation-panel"
 import { ExportButtons } from "./export-buttons"
 
 export function Calculator() {
@@ -83,6 +85,9 @@ export function Calculator() {
   const [observedLat, setObservedLat] = useState(37.9845)
   const [observedLon, setObservedLon] = useState(23.735)
 
+  // Τριγωνισμός — λίστα διοπτεύσεων (σταθμός + αζιμούθιο προς στόχο)
+  const [sightings, setSightings] = useState<Sighting[]>([])
+
   // Preset & GPS UI feedback
   const [activePreset, setActivePreset] = useState<string>("")
   const [gpsStatus, setGpsStatus] = useState<string>("")
@@ -123,6 +128,7 @@ export function Calculator() {
         if (typeof s.generatorBandLabel === "string") setGeneratorBandLabel(s.generatorBandLabel)
         if (Number.isFinite(s.observedLat)) setObservedLat(s.observedLat)
         if (Number.isFinite(s.observedLon)) setObservedLon(s.observedLon)
+        if (Array.isArray(s.sightings)) setSightings(s.sightings)
         if (typeof s.activePreset === "string") setActivePreset(s.activePreset)
       }
     } catch (e) {
@@ -142,7 +148,7 @@ export function Calculator() {
           soilType, sigmaCustom, targetDepth,
           sec6Soil, sec6Theta, sec6H, dipoleAxis,
           generatorLat, generatorLon, generatorFrequency, generatorBandLabel,
-          observedLat, observedLon, activePreset,
+          observedLat, observedLon, sightings, activePreset,
         }),
       )
     } catch (e) {
@@ -154,7 +160,7 @@ export function Calculator() {
     soilType, sigmaCustom, targetDepth,
     sec6Soil, sec6Theta, sec6H, dipoleAxis,
     generatorLat, generatorLon, generatorFrequency, generatorBandLabel,
-    observedLat, observedLon, activePreset,
+    observedLat, observedLon, sightings, activePreset,
   ])
 
   // Εφαρμογή γρήγορης προεπιλογής υλικού + εδάφους (skin depth & διάθλαση).
@@ -1014,6 +1020,18 @@ export function Calculator() {
           </>
         )}
       </Panel>
+
+      <TriangulationPanel
+        sightings={sightings}
+        setSightings={setSightings}
+        defaultLat={generatorLat}
+        defaultLon={generatorLon}
+        defaultBearing={endpoint.bearingDeg}
+        onUseAsTarget={(la, lo) => {
+          setObservedLat(la)
+          setObservedLon(lo)
+        }}
+      />
 
       <HistoryPanel lat={lat} lon={lon} capture={captureMeasurement} />
 
