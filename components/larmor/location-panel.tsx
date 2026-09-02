@@ -76,6 +76,8 @@ export function LocationPanel({
   const [status, setStatus] = useState("Αναμονή")
   const [statusTone, setStatusTone] = useState<"muted" | "phosphor" | "brass">("muted")
   const [busy, setBusy] = useState(false)
+  const [gpsBusy, setGpsBusy] = useState(false)
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null)
 
   function useCurrentLocation() {
     if (!navigator.geolocation) {
@@ -83,28 +85,57 @@ export function LocationPanel({
       setStatusTone("brass")
       return
     }
-    setStatus("Αναμονή άδειας τοποθεσίας…")
+    setGpsBusy(true)
+    setStatus("Αναμονή άδειας τοποθεσίας (υψηλή ακρίβεια GPS)…")
     setStatusTone("muted")
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const la = Number(pos.coords.latitude.toFixed(6))
         const lo = Number(pos.coords.longitude.toFixed(6))
+        const acc = Number.isFinite(pos.coords.accuracy) ? Math.round(pos.coords.accuracy) : null
+        setGpsAccuracy(acc)
         setLat(la)
         setLon(lo)
         // Μετακίνησε και τη γεννήτρια ώστε ο χάρτης να κεντραριστεί στην τρέχουσα θέση.
         setGeneratorLat(la)
         setGeneratorLon(lo)
-        if (pos.coords.altitude != null) setElev(Math.round(pos.coords.altitude))
+        // Το GPS υψόμετρο σπάνια είναι διαθέσιμο (null σε πολλά κινητά/laptop).
+        // Αν λείπει, φέρε το υψόμετρο εδάφους από API ανύψωσης (DEM).
+        if (Number.isFinite(pos.coords.altitude as number)) {
+          setElev(Math.round(pos.coords.altitude as number))
+        } else {
+          void fetchElevation(la, lo)
+        }
         // Υπολόγισε αμέσως το πεδίο B με το NOAA WMM για τη νέα θέση.
         void fetchLiveB(la, lo)
-        setStatus("Τοποθεσία OK — ο χάρτης μεταφέρθηκε στη θέση σου.")
+        setStatus(acc != null ? `Τοποθεσία OK — ακρίβεια ±${acc} m.` : "Τοποθεσία OK — ο χάρτης μεταφέρθηκε.")
         setStatusTone("phosphor")
+        setGpsBusy(false)
       },
       (err) => {
         setStatus("Άρνηση/σφάλμα τοποθεσίας: " + err.message)
         setStatusTone("brass")
+        setGpsBusy(false)
       },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
     )
+  }
+
+  async function fetchElevation(latArg: number, lonArg: number) {
+    try {
+      const res = await fetch(
+        `https://api.open-meteo.com/v1/elevation?latitude=${latArg}&longitude=${lonArg}`,
+        { headers: { Accept: "application/json" } },
+      )
+      const data = await res.json()
+      const value = Array.isArray(data?.elevation) ? Number(data.elevation[0]) : Number(data?.elevation)
+      if (Number.isFinite(value)) {
+        setElev(Math.round(value))
+        setStatus((s) => (s.startsWith("Τοποθεσία OK") ? `${s} Υψόμετρο εδάφους ${Math.round(value)} m.` : s))
+      }
+    } catch {
+      // Σιωπηλή αποτυχία — το υψόμετρο απλώς παραμένει ως έχει.
+    }
   }
 
   async function fetchLiveB(latArg: number = lat, lonArg: number = lon) {
@@ -251,8 +282,17 @@ export function LocationPanel({
           </div>
 
           <div className="flex flex-col gap-2.5">
-            <button type="button" className={buttonClass + " flex items-center gap-2"} onClick={useCurrentLocation}>
-              <Crosshair className="size-4" /> Χρήση τρέχουσας τοποθεσίας
+            <button
+              type="button"
+              className={buttonClass + " flex items-center gap-2"}
+              onClick={useCurrentLocation}
+              disabled={gpsBusy}
+            >
+              <Crosshair className={"size-4" + (gpsBusy ? " animate-pulse" : "")} />
+              {gpsBusy ? "Εντοπισμός GPS…" : "Χρήση τρέχουσας τοποθεσίας"}
+              {gpsAccuracy != null && !gpsBusy && (
+                <span className="ml-auto font-mono text-[0.66rem] text-phosphor">±{gpsAccuracy} m</span>
+              )}
             </button>
             <button
               type="button"
