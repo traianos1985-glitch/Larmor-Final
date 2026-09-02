@@ -60,13 +60,14 @@ export function Calculator() {
   const [selectedN, setSelectedN] = useState(1)
   const [unitMultiplier, setUnitMultiplier] = useState(1)
 
-  // Soil skin depth (section 3)
+  // Soil skin depth (section 3) — το «Εκτιμώμενο βάθος στόχου» είναι ΜΙΑ κοινή τιμή
+  // που τροφοδοτεί όλα τα sections που χρειάζονται βάθος (3 και 6).
   const [soilType, setSoilType] = useState("0.01")
   const [sigmaCustom, setSigmaCustom] = useState(0.001)
   const [targetDepth, setTargetDepth] = useState(1)
 
-  // Refraction (section 6)
-  const [sec6Depth, setSec6Depth] = useState(1.0)
+  // Refraction (section 6) — το βάθος d δεν είναι πλέον ξεχωριστό state·
+  // χρησιμοποιεί το κοινό targetDepth ώστε να μη δίνεται δύο φορές.
   const [sec6Soil, setSec6Soil] = useState("10|0.01")
   const [sec6Theta, setSec6Theta] = useState(15)
   const [sec6H, setSec6H] = useState(1.0)
@@ -111,7 +112,7 @@ export function Calculator() {
         if (typeof s.soilType === "string") setSoilType(s.soilType)
         if (Number.isFinite(s.sigmaCustom)) setSigmaCustom(s.sigmaCustom)
         if (Number.isFinite(s.targetDepth)) setTargetDepth(s.targetDepth)
-        if (Number.isFinite(s.sec6Depth)) setSec6Depth(s.sec6Depth)
+        else if (Number.isFinite(s.sec6Depth)) setTargetDepth(s.sec6Depth)
         if (typeof s.sec6Soil === "string") setSec6Soil(s.sec6Soil)
         if (Number.isFinite(s.sec6Theta)) setSec6Theta(s.sec6Theta)
         if (Number.isFinite(s.sec6H)) setSec6H(s.sec6H)
@@ -139,7 +140,7 @@ export function Calculator() {
           lat, lon, elev, date, bfield, bSource, geomag,
           materialId, maxharm, selectedN, unitMultiplier,
           soilType, sigmaCustom, targetDepth,
-          sec6Depth, sec6Soil, sec6Theta, sec6H, dipoleAxis,
+          sec6Soil, sec6Theta, sec6H, dipoleAxis,
           generatorLat, generatorLon, generatorFrequency, generatorBandLabel,
           observedLat, observedLon, activePreset,
         }),
@@ -151,7 +152,7 @@ export function Calculator() {
     lat, lon, elev, date, bfield, bSource, geomag,
     materialId, maxharm, selectedN, unitMultiplier,
     soilType, sigmaCustom, targetDepth,
-    sec6Depth, sec6Soil, sec6Theta, sec6H, dipoleAxis,
+    sec6Soil, sec6Theta, sec6H, dipoleAxis,
     generatorLat, generatorLon, generatorFrequency, generatorBandLabel,
     observedLat, observedLon, activePreset,
   ])
@@ -288,12 +289,12 @@ export function Calculator() {
       if (!f || f <= 0) return null
       const { n_r, loss_tangent, skin_depth_m } = computeComplexN(epsilon_r, sigma, f)
       const { theta2_deg, is_TIR, theta_c_deg } = computeSnell(n_r, sec6Theta)
-      const x_exit = sec6Depth * Math.tan(theta1_rad)
+      const x_exit = targetDepth * Math.tan(theta1_rad)
       const x_total = is_TIR ? x_exit : x_exit + sec6H * Math.tan(((theta2_deg as number) * Math.PI) / 180)
       const v_soil = 3e8 / n_r
       const lambda = v_soil / f
-      const r_fresnel = Math.sqrt(lambda * sec6Depth)
-      const propagation = computeGprPropagation(epsilon_r, sigma, f, Math.hypot(sec6Depth, x_total))
+      const r_fresnel = Math.sqrt(lambda * targetDepth)
+      const propagation = computeGprPropagation(epsilon_r, sigma, f, Math.hypot(targetDepth, x_total))
       const atten_db = propagation.attenuationDb
       return { label, n_r, loss_tangent, theta2_deg, is_TIR, theta_c_deg, x_exit, x_total, r_fresnel, atten_db, f, skin_depth_m, propagation }
     }
@@ -302,7 +303,7 @@ export function Calculator() {
     const mainRow = computeRow(genRowLabel, fSelected)
     const selectedLabel = generatorFrequencyIsAuto ? (selectedBand?.label ?? null) : null
     return { rows, mainRow, selectedLabel, epsilon_r, sigma }
-  }, [sec6Soil, sec6Theta, sec6Depth, sec6H, bands, fSelected, genRowLabel, generatorFrequencyIsAuto, selectedBand])
+  }, [sec6Soil, sec6Theta, targetDepth, sec6H, bands, fSelected, genRowLabel, generatorFrequencyIsAuto, selectedBand])
 
   const drift = useMemo(
     () => computeDriftDirection(dipoleAxis, geomag.D),
@@ -352,7 +353,7 @@ export function Calculator() {
   }
 
   // Η γεννήτρια και το σημείο μέτρησης ταυτίζονται: όποιο και να αλλάξει, συγχρονίζονται
-  // και τα δύο ζεύγη συντεταγμένων, ο χάρτης κεντράρεται και το πεδίο B επανυπολογίζεται.
+  // και τα δύο ζεύγη συν��εταγμένων, ο χάρτης κεντράρεται και το πεδίο B επανυπολογίζεται.
   function applyGeneratorLat(v: number) {
     setGeneratorLat(v)
     setLat(v)
@@ -379,7 +380,7 @@ export function Calculator() {
       soil_type: sec6Soil,
       theta1_deg: sec6Theta,
       h_m: sec6H,
-      depth_m: sec6Depth,
+      depth_m: targetDepth,
       drift_x_total_m: refraction.mainRow?.x_total ?? 0,
       drift_axis: drift.axis_label,
       drift_dir1: drift.dir1_label,
@@ -780,6 +781,7 @@ export function Calculator() {
               value={targetDepth}
               onChange={(e) => setTargetDepth(Number.parseFloat(e.target.value) || 0)}
             />
+            <span className="mt-1 block font-mono text-[0.6rem] text-phosphor">εφαρμόζεται αυτόματα και στο §6 (διάθλαση/drift)</span>
           </Field>
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
@@ -796,7 +798,7 @@ export function Calculator() {
       <Panel
         step="4"
         title="Skin Depth Υλικού-Στόχου (μr)"
-        desc="Εκτίμηση διείσδυσης με το μοντέλο καλού αγωγού. ��ια μη μεταλλικά υλικά οι τιμές αγωγιμότητας είναι προσεγγιστικές και το αποτέλεσμα δεν αποτελεί πλήρες μοντέλο διηλεκτρικού συντονισμού."
+        desc="Εκτίμηση διείσδυσης με το μοντέλο καλού αγωγού. ����ια μη μεταλλικά υλικά οι τιμές αγωγιμότητας είναι προσεγγιστικές και το αποτέλεσμα δεν αποτελεί πλήρες μοντέλο διηλεκτρικού συντονισμού."
       >
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Πλήθος μονάδων συγκέντρωσης" htmlFor="unit-multiplier">
@@ -863,12 +865,17 @@ export function Calculator() {
         desc="Οριζόντια απόκλιση σήματος βάσει πλήρους μιγαδικού δείκτη διάθλασης, Νόμου Snell στη διεπαφή εδάφους/α��ρα και γεωμετρικής ανάλυσης ray-path (GPR standard)."
       >
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <Field label="Εκτ. βάθος στόχου d (m)" htmlFor="sec6-depth">
-            <select id="sec6-depth" className={selectClass} value={sec6Depth} onChange={(e) => setSec6Depth(Number.parseFloat(e.target.value))}>
-              {[0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0].map((d) => (
-                <option key={d} value={d}>{d.toFixed(1)} m</option>
-              ))}
-            </select>
+          <Field label="Εκτ. βάθος στόχου d (m)" htmlFor="sec6-depth" warn={validateDepth(targetDepth)}>
+            <input
+              id="sec6-depth"
+              type="number"
+              step="0.1"
+              min={0}
+              className={inputClass}
+              value={targetDepth}
+              onChange={(e) => setTargetDepth(Number.parseFloat(e.target.value) || 0)}
+            />
+            <span className="mt-1 block font-mono text-[0.6rem] text-phosphor">συγχρονισμένο με §3 «βάθος στόχου»</span>
           </Field>
           <Field label="Διηλεκτρική σταθερά εδάφους" htmlFor="sec6-epsilon">
             <select id="sec6-epsilon" className={selectClass} value={sec6Soil} onChange={(e) => { setSec6Soil(e.target.value); setActivePreset("") }}>
@@ -956,7 +963,7 @@ export function Calculator() {
             <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_auto]">
               <div className="overflow-hidden rounded-sm border border-panel-line bg-readout p-2">
                 <RayDiagram
-                  d={sec6Depth}
+                  d={targetDepth}
                   h={sec6H}
                   theta1={sec6Theta}
                   theta2={refraction.mainRow.theta2_deg}

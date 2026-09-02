@@ -99,13 +99,14 @@ export function LocationPanel({
         // Μετακίνησε και τη γεννήτρια ώστε ο χάρτης να κεντραριστεί στην τρέχουσα θέση.
         setGeneratorLat(la)
         setGeneratorLon(lo)
-        // Το GPS υψόμετρο σπάνια είναι διαθέσιμο (null σε πολλά κινητά/laptop).
-        // Αν λείπει, φέρε το υψόμετρο εδάφους από API ανύψωσης (DEM).
-        if (Number.isFinite(pos.coords.altitude as number)) {
-          setElev(Math.round(pos.coords.altitude as number))
-        } else {
-          void fetchElevation(la, lo)
+        // Το GPS υψόμετρο (ελλειψοειδές) είναι σπάνιο και αναξιόπιστο σε laptop/κινητά.
+        // Προτιμούμε πάντα το υψόμετρο εδάφους (ορθομετρικό) από DEM API· το GPS
+        // altitude κρατιέται μόνο ως προσωρινή τιμή μέχρι να απαντήσει το DEM.
+        const gpsAlt = pos.coords.altitude
+        if (Number.isFinite(gpsAlt as number)) {
+          setElev(Math.round(gpsAlt as number))
         }
+        void fetchElevation(la, lo)
         // Υπολόγισε αμέσως το πεδίο B με το NOAA WMM για τη νέα θέση.
         void fetchLiveB(la, lo)
         setStatus(acc != null ? `Τοποθεσία OK — ακρίβεια ±${acc} m.` : "Τοποθεσία OK — ο χάρτης μεταφέρθηκε.")
@@ -122,20 +123,38 @@ export function LocationPanel({
   }
 
   async function fetchElevation(latArg: number, lonArg: number) {
-    try {
-      const res = await fetch(
-        `https://api.open-meteo.com/v1/elevation?latitude=${latArg}&longitude=${lonArg}`,
-        { headers: { Accept: "application/json" } },
-      )
-      const data = await res.json()
-      const value = Array.isArray(data?.elevation) ? Number(data.elevation[0]) : Number(data?.elevation)
-      if (Number.isFinite(value)) {
-        setElev(Math.round(value))
-        setStatus((s) => (s.startsWith("Τοποθεσία OK") ? `${s} Υψόμετρο εδάφους ${Math.round(value)} m.` : s))
+    if (!Number.isFinite(latArg) || !Number.isFinite(lonArg)) return
+    // Δύο ανεξάρτητοι DEM providers· αν ο πρώτος αποτύχει (CORS/δίκτυο), δοκιμάζεται ο δεύτερος.
+    const providers: Array<{ name: string; url: string; parse: (d: any) => number }> = [
+      {
+        name: "Open-Meteo",
+        url: `https://api.open-meteo.com/v1/elevation?latitude=${latArg}&longitude=${lonArg}`,
+        parse: (d) => (Array.isArray(d?.elevation) ? Number(d.elevation[0]) : Number(d?.elevation)),
+      },
+      {
+        name: "OpenTopoData",
+        url: `https://api.opentopodata.org/v1/aster30m?locations=${latArg},${lonArg}`,
+        parse: (d) => Number(d?.results?.[0]?.elevation),
+      },
+    ]
+    for (const p of providers) {
+      try {
+        const res = await fetch(p.url, { headers: { Accept: "application/json" } })
+        if (!res.ok) continue
+        const data = await res.json()
+        const value = p.parse(data)
+        if (Number.isFinite(value)) {
+          setElev(Math.round(value))
+          setStatus((s) => `${s.startsWith("Τοποθεσία OK") ? s : "Τοποθεσία OK."} Υψόμετρο εδάφους ${Math.round(value)} m (${p.name}).`)
+          setStatusTone("phosphor")
+          return
+        }
+      } catch {
+        // Δοκίμασε τον επόμενο provider.
       }
-    } catch {
-      // Σιωπηλή αποτυχία — το υψόμετρο απλώς παραμένει ως έχει.
     }
+    setStatus((s) => `${s} Το υψόμετρο εδάφους δεν ήταν διαθέσιμο — δώσε το χειροκίνητα.`)
+    setStatusTone("brass")
   }
 
   async function fetchLiveB(latArg: number = lat, lonArg: number = lon) {
@@ -346,7 +365,7 @@ export function LocationPanel({
         <Readout label="Z κατακόρυφο" value={geomag.Z.toFixed(3)} unit="µT" tone="muted" />
       </div>
       <p className="mt-3 font-mono text-[0.68rem] leading-relaxed text-muted-foreground">
-        Απόκλιση D = {geomag.D.toFixed(2)}° · Κλίση I = {geomag.I.toFixed(2)}° · Αβεβαιότ��τα F = {geomag.uncertainty == null ? "—" : `±${geomag.uncertainty.toFixed(3)} µT`} · Secular variation: D {geomag.secularVariation.D == null ? "—" : `${geomag.secularVariation.D.toFixed(2)}′/yr`}, I {geomag.secularVariation.I == null ? "—" : `${geomag.secularVariation.I.toFixed(2)}′/yr`}, F {geomag.secularVariation.F == null ? "—" : `${geomag.secularVariation.F.toFixed(3)} µT/yr`}.
+        Απόκλιση D = {geomag.D.toFixed(2)}° · Κλίση I = {geomag.I.toFixed(2)}° · Αβεβαιότ��τα F = {geomag.uncertainty == null ? "—" : `±${geomag.uncertainty.toFixed(3)} µT`} · Secular variation: D {geomag.secularVariation.D == null ? "—" : `${geomag.secularVariation.D.toFixed(2)}���/yr`}, I {geomag.secularVariation.I == null ? "—" : `${geomag.secularVariation.I.toFixed(2)}′/yr`}, F {geomag.secularVariation.F == null ? "—" : `${geomag.secularVariation.F.toFixed(3)} µT/yr`}.
       </p>
     </Panel>
   )
