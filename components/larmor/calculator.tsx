@@ -47,6 +47,7 @@ import { LocationPanel, type GeomagResult } from "./location-panel"
 import { HistoryPanel, type Measurement } from "./history-panel"
 import { ExportButtons } from "./export-buttons"
 import { TriangulationPanel } from "./triangulation-panel"
+import { SuspectSitesPanel } from "./suspect-sites-panel"
 
 export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
   // Location / field
@@ -577,6 +578,14 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
       <TriangulationPanel
         currentGenerator={{ lat: generatorLat, lon: generatorLon }}
         currentBearing={endpoint.bearingDeg}
+      />
+
+      <SuspectSitesPanel
+        targetLat={estimatedTarget.lat}
+        targetLon={estimatedTarget.lon}
+        targetDepth={targetDepth}
+        driftMeters={refraction.mainRow?.x_total ?? 0}
+        driftAxisLabel={drift.axis_label}
       />
         </>
       )}
