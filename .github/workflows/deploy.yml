@@ -1,5 +1,7 @@
 name: Deploy to GitHub Pages
 
+# Pages Source = GitHub Actions (workflow). Το παλιό legacy Jekyll build έχει απενεργοποιηθεί.
+
 on:
   push:
     branches: [main, master]
