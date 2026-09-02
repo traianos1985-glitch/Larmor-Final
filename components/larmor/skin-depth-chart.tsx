@@ -41,8 +41,8 @@ export function SkinDepthChart({ data }: { data: SkinDepthPoint[] }) {
     )
   }
   return (
-    <div className="h-56 w-full">
-      <ResponsiveContainer width="100%" height="100%">
+    <div className="h-56 w-full min-w-0">
+      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={200} debounce={1}>
         <LineChart data={data} margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
           <CartesianGrid strokeDasharray="2 4" stroke="var(--panel-line)" vertical={false} />
           <XAxis
