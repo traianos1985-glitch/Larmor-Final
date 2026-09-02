@@ -58,6 +58,181 @@ interface SuspectSpot {
   disfavors?: EnvKey[]
 }
 
+/**
+ * Ορόσημα που μπορεί να έχει ο ερευνητής κοντά στην περιοχή έρευνας.
+ * Κάθε ορόσημο:
+ *  - `search`  : πού ακριβώς να ψάξει σε σχέση με το ορόσημο (δόγμα §1-4)
+ *  - `offset`  : τυπικό μετρημένο διάνυσμα απόστασης/φοράς από τη βάση του
+ *                (τα caches τοποθετούνται σε μετρήσιμη απόσταση/αζιμούθιο από
+ *                μόνιμα σημεία αναφοράς — §1-5/§1-6)
+ *  - `method`  : κύρια μέθοδος απόκρυψης που ευνοεί
+ *  - `env`     : χαρακτηριστικά εδάφους που συνεπάγεται (τροφοδοτούν την ιεράρχηση)
+ *  - `isReference` : αν λειτουργεί κυρίως ως σημείο αναφοράς εντοπισμού
+ */
+interface Landmark {
+  id: string
+  label: string
+  icon: string
+  method: Method
+  search: string
+  offset: string
+  env: EnvKey[]
+  isReference?: boolean
+}
+
+const LANDMARKS: Landmark[] = [
+  {
+    id: "threshing-floor",
+    label: "Αλώνι",
+    icon: "◎",
+    method: "burial",
+    search:
+      "Έλεγξε τις περιμετρικές όρθιες πέτρες και τη βάση της κεντρικής πλάκας· ταφή συνήθως λίγα βήματα έξω από το χείλος, στην υπήνεμη πλευρά.",
+    offset: "2–5 m ακτινικά από το χείλος, σε σταθερό αζιμούθιο προς μόνιμο σημάδι.",
+    env: ["highGround"],
+    isReference: true,
+  },
+  {
+    id: "well",
+    label: "Πηγάδι",
+    icon: "○",
+    method: "concealment",
+    search:
+      "Κοιλότητες πίσω από χαλαρές πέτρες της εσωτερικής λιθοδομής 1–2 m κάτω από το χείλος· ξηρά/εγκαταλελειμμένα πηγάδια είναι κλασικές κρύπτες.",
+    offset: "Εντός του φρέατος ή στη βάση της στεφάνης· έλεγξε στάθμη νερού για κίνδυνο πλημμύρας.",
+    env: ["infrastructure", "nearWater"],
+    isReference: true,
+  },
+  {
+    id: "old-church",
+    label: "Παλιά εκκλησία / ξωκλήσι",
+    icon: "†",
+    method: "concealment",
+    search:
+      "Βάση αγίας τράπεζας, χαλαρές πλάκες δαπέδου, εσοχές τοίχων, κωδωνοστάσιο και τυχόν κρύπτη· μόνιμο δημόσιο κτίσμα με σπάνιες ανακαινίσεις.",
+    offset: "Εντός του κτίσματος ή στη θεμελίωση· μπορεί να χρησιμεύσει και ως σημείο αναφοράς.",
+    env: ["urban", "ruins"],
+    isReference: true,
+  },
+  {
+    id: "marked-tree",
+    label: "Σημαδεμένο δέντρο",
+    icon: "♣",
+    method: "burial",
+    search:
+      "Κλασικό ορόσημο ταφής — σκάψε κοντά στο ριζικό σύστημα, συχνά στη σκιερή/βόρεια πλευρά του κορμού όπου το χώμα είναι πιο χαλαρό.",
+    offset: "Μετρημένη απόσταση & φορά από τη βάση του κορμού (π.χ. βήματα προς συγκεκριμένο αζιμούθιο).",
+    env: ["wooded", "highGround"],
+    isReference: true,
+  },
+  {
+    id: "rocks",
+    label: "Βράχια / βραχώδης σχηματισμός",
+    icon: "◭",
+    method: "concealment",
+    search:
+      "Φυσικές κοιλότητες κάτω ή ανάμεσα σε ογκόλιθους, ρωγμές και κάτω από χαλαρές πλάκες· ένας διακριτός βράχος είναι εξαιρετικό σημείο αναφοράς.",
+    offset: "Στη βάση ή σε σχισμή· μέτρησε από την πιο διακριτή κορυφή/ακμή.",
+    env: ["highGround", "wooded"],
+    isReference: true,
+  },
+  {
+    id: "dry-stone-wall",
+    label: "Ξερολιθιά / πέτρινη μάντρα",
+    icon: "▤",
+    method: "concealment",
+    search:
+      "Χαλαρές πέτρες, εσωτερικά κενά και ιδίως οι γωνίες/άκρα του τοίχου· αναζήτησε σημεία που ηχούν κούφια ή με πρόσφατη μετακίνηση.",
+    offset: "Εντός του τοίχου ή στη βάση· μέτρησε από γωνία ή στύλο πύλης.",
+    env: ["ruins"],
+  },
+  {
+    id: "ruined-house",
+    label: "Ερειπωμένο σπίτι / μαντρί",
+    icon: "⌂",
+    method: "concealment",
+    search:
+      "Εστία/τζάκι, κατώφλια, χαλαρές πλάκες δαπέδου και εντοιχισμένα κενά· εγκαταλελειμμένα κτίρια επιτρέπουν εύκολη επανεπίσκεψη.",
+    offset: "Εντός του κτίσματος· ταφή δυνατή στο περιβάλλον οικόπεδο με σταθερό σημάδι.",
+    env: ["ruins", "urban"],
+  },
+  {
+    id: "cistern",
+    label: "Στέρνα / γούρνα",
+    icon: "▣",
+    method: "concealment",
+    search:
+      "Εσωτερικό ξηρής στέρνας, πίσω από τη λιθοδομή ή κάτω από το κάλυμμα· προσοχή στη στάθμη νερού και στην υγρασία.",
+    offset: "Εντός της κατασκευής ή στη βάση των τοιχωμάτων.",
+    env: ["infrastructure", "nearWater"],
+  },
+  {
+    id: "cemetery",
+    label: "Νεκροταφείο / τάφος",
+    icon: "✝",
+    method: "concealment",
+    search:
+      "Κρύπτες, μαυσωλεία, βάσεις επιτύμβιων στηλών· μόνιμα κτίσματα που σπάνια ανασκάπτονται ή κατεδαφίζονται.",
+    offset: "Εντός ταφικού κτίσματος ή στη βάση μόνιμης στήλης.",
+    env: ["ruins", "urban"],
+    isReference: true,
+  },
+  {
+    id: "bridge",
+    label: "Γεφύρι",
+    icon: "⌒",
+    method: "concealment",
+    search:
+      "Ακρόβαθρα, οχετοί και χαλαρές πέτρες στο κάτω μέρος του τόξου· έλεγξε για κίνδυνο πλημμύρας κοντά στη ροή.",
+    offset: "Στα ακρόβαθρα ή σε κοντινό οχετό· μέτρησε από την άκρη του καταστρώματος.",
+    env: ["infrastructure", "nearWater"],
+    isReference: true,
+  },
+  {
+    id: "spring",
+    label: "Βρύση / πηγή",
+    icon: "≈",
+    method: "burial",
+    search:
+      "Ταφή πάνω από την ανώτατη ετήσια στάθμη νερού, σε στραγγιζόμενο σημείο κοντά στην πηγή· η βρύση χρησιμεύει ως σταθερό σημείο αναφοράς.",
+    offset: "Υπερυψωμένο σημείο, μετρημένη απόσταση από τη λεκάνη/κρουνό.",
+    env: ["nearWater", "highGround"],
+    isReference: true,
+  },
+  {
+    id: "crossroads",
+    label: "Σταυροδρόμι / διχάλα",
+    icon: "✛",
+    method: "burial",
+    search:
+      "Ταφή σε μετρημένο διάνυσμα από το κέντρο της διασταύρωσης· τα σταυροδρόμια & χιλιομετρικοί δείκτες είναι κύρια σημεία αναφοράς του εγχειριδίου.",
+    offset: "Σταθερή απόσταση & αζιμούθιο από τον κόμβο ή τον χιλιομετρικό δείκτη.",
+    env: ["highGround"],
+    isReference: true,
+  },
+  {
+    id: "cave",
+    label: "Σπηλιά",
+    icon: "◗",
+    method: "concealment",
+    search:
+      "Ξηρά εσωτερικά κενά, εσοχές και κάτω από πεσμένους ογκόλιθους· ελάχιστη ανάγκη συσκευασίας, προστασία από τα στοιχεία.",
+    offset: "Στο εσωτερικό, μετρημένη απόσταση από την είσοδο/διακριτό σχηματισμό.",
+    env: ["underground", "wooded"],
+  },
+  {
+    id: "shrine",
+    label: "Εικονοστάσι / προσκυνητάρι",
+    icon: "⛨",
+    method: "concealment",
+    search:
+      "Κοιλότητα πίσω/κάτω από την εικόνα, στη βάση του κτίσματος ή σε χαλαρή πέτρα· μικρό αλλά μόνιμο & διακριτό ορόσημο.",
+    offset: "Εντός ή στη βάση του· άριστο σημείο αναφοράς λόγω μοναδικότητας.",
+    env: ["ruins"],
+    isReference: true,
+  },
+]
+
 // Πηγή: κατάλογος πιθανών σημείων απόκρυψης (§1-4c) + κριτήρια ταφής (§1-4d)
 // + σημεία βύθισης (§1-4e) του εγχειριδίου.
 const SUSPECT_SPOTS: SuspectSpot[] = [
@@ -202,6 +377,7 @@ export function SuspectSitesPanel({
   driftAxisLabel: string
 }) {
   const [env, setEnv] = useState<Set<EnvKey>>(new Set())
+  const [landmarks, setLandmarks] = useState<Set<string>>(new Set())
 
   function toggleEnv(k: EnvKey) {
     setEnv((prev) => {
@@ -212,6 +388,28 @@ export function SuspectSitesPanel({
     })
   }
 
+  function toggleLandmark(id: string) {
+    setLandmarks((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const selectedLandmarks = useMemo(
+    () => LANDMARKS.filter((l) => landmarks.has(l.id)),
+    [landmarks],
+  )
+
+  // Τα επιλεγμένα ορόσημα συνεισφέρουν αυτόματα χαρακτηριστικά εδάφους,
+  // ώστε να επηρεάζουν και την ιεράρχηση των ύποπτων σημείων.
+  const effectiveEnv = useMemo(() => {
+    const merged = new Set(env)
+    for (const l of selectedLandmarks) for (const e of l.env) merged.add(e)
+    return merged
+  }, [env, selectedLandmarks])
+
   // Βαθμολόγηση κάθε ύποπτου σημείου: βάση + ταιριάσματα περιβάλλοντος
   // (×2) − αντενδείξεις, με μικρό μπόνους μεθόδου ανάλογα με το βάθος.
   // Ρηχός/επιφανειακός στόχος → ευνοεί απόκρυψη· βαθύτερος → ευνοεί ταφή.
@@ -220,19 +418,19 @@ export function SuspectSitesPanel({
     const scored = SUSPECT_SPOTS.map((spot) => {
       let score = 1
       let matches = 0
-      for (const f of spot.favors) if (env.has(f)) matches++
+      for (const f of spot.favors) if (effectiveEnv.has(f)) matches++
       score += matches * 2
-      if (spot.disfavors) for (const d of spot.disfavors) if (env.has(d)) score -= 1
+      if (spot.disfavors) for (const d of spot.disfavors) if (effectiveEnv.has(d)) score -= 1
       if (spot.method === "concealment" && shallow) score += 1
       if (spot.method === "burial" && !shallow) score += 1
       // Η βύθιση είναι εγγενώς σπάνια — χωρίς νερό σχεδόν αποκλείεται.
-      if (spot.method === "submersion" && !env.has("nearWater")) score -= 2
+      if (spot.method === "submersion" && !effectiveEnv.has("nearWater")) score -= 2
       return { spot, score: Math.max(0, score), matches }
     })
     scored.sort((a, b) => b.score - a.score)
     const maxScore = Math.max(1, ...scored.map((s) => s.score))
     return { scored, maxScore }
-  }, [env, targetDepth])
+  }, [effectiveEnv, targetDepth])
 
   const shallow = targetDepth < 0.4
   const primaryMethod: Method = shallow ? "concealment" : "burial"
@@ -305,6 +503,87 @@ export function SuspectSitesPanel({
           })}
         </div>
       </fieldset>
+
+      {/* Ορόσημα κοντά στην περιοχή έρευνας */}
+      <fieldset className="mt-4">
+        <legend className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
+          Τι έχεις κοντά; (επίλεξε ορόσημα — η εφαρμογή υποδεικνύει πού να ψάξεις)
+        </legend>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {LANDMARKS.map((l) => {
+            const active = landmarks.has(l.id)
+            return (
+              <button
+                key={l.id}
+                type="button"
+                aria-pressed={active}
+                onClick={() => toggleLandmark(l.id)}
+                className={
+                  "flex items-center gap-2 rounded-sm border px-2.5 py-2 text-left transition-colors " +
+                  (active
+                    ? "border-brass bg-secondary/50 text-phosphor"
+                    : "border-panel-line text-muted-foreground hover:border-brass-dim hover:text-foreground")
+                }
+              >
+                <span
+                  aria-hidden
+                  className={
+                    "inline-flex size-5 shrink-0 items-center justify-center font-mono text-[0.85rem] " +
+                    (active ? "text-brass" : "text-muted-foreground")
+                  }
+                >
+                  {l.icon}
+                </span>
+                <span className="font-mono text-[0.72rem] font-semibold leading-tight">{l.label}</span>
+              </button>
+            )
+          })}
+        </div>
+      </fieldset>
+
+      {/* Στοχευμένες υποδείξεις ανά επιλεγμένο ορόσημο */}
+      {selectedLandmarks.length > 0 && (
+        <div className="mt-4 flex flex-col gap-2.5">
+          <p className="font-mono text-[0.72rem] uppercase tracking-wide text-brass">
+            Πού να ψάξεις γύρω από τα ορόσημα ({selectedLandmarks.length})
+          </p>
+          {selectedLandmarks.map((l) => (
+            <div key={l.id} className="rounded-sm border border-brass-dim bg-readout px-3.5 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="flex items-center gap-2 font-mono text-[0.8rem] text-foreground">
+                  <span aria-hidden className="text-[0.9rem] text-brass">
+                    {l.icon}
+                  </span>
+                  {l.label}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  {l.isReference && (
+                    <span className="rounded-sm border border-panel-line px-1.5 py-0.5 font-mono text-[0.58rem] uppercase text-muted-foreground">
+                      σημείο αναφοράς
+                    </span>
+                  )}
+                  <span
+                    className={
+                      "rounded-sm border px-1.5 py-0.5 font-mono text-[0.62rem] uppercase " + METHOD_TONE[l.method]
+                    }
+                  >
+                    {METHOD_LABEL[l.method]}
+                  </span>
+                </span>
+              </div>
+              <p className="mt-1.5 font-mono text-[0.68rem] leading-relaxed text-muted-foreground">{l.search}</p>
+              <p className="mt-1.5 flex gap-1.5 font-mono text-[0.64rem] leading-relaxed">
+                <span className="shrink-0 uppercase tracking-wide text-brass">Θέση:</span>
+                <span className="text-foreground">{l.offset}</span>
+              </p>
+            </div>
+          ))}
+          <p className="font-mono text-[0.62rem] leading-relaxed text-muted-foreground">
+            Οι αποστάσεις είναι ενδεικτικές — μέτρησε πάντα από τη βάση του ορόσημου σε σταθερό αζιμούθιο και διασταύρωσε
+            με την ακτίνα ελέγχου του drift παραπάνω.
+          </p>
+        </div>
+      )}
 
       {/* Ιεραρχημένος κατάλογος ύποπτων σημείων */}
       <div className="mt-5 flex flex-col gap-2.5">
