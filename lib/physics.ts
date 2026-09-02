@@ -811,6 +811,25 @@ export interface TriResult {
   /** σημεία τομής ανά ζεύγος διευθύνσεων (για οπτικοποίηση διασποράς) */
   intersections: Array<{ lat: number; lon: number }>
   angularUncertaintyDeg: number
+  /** καλύτερη (πλησιέστερη στις 90°) γωνία τομής μεταξύ ζευγών διευθύνσεων */
+  bestCrossAngleDeg: number
+  /** συνολικός δείκτης ποιότητας γεωμετρίας 0–100 */
+  qualityScore: number
+  /** κατηγορία ποιότητας */
+  qualityGrade: "excellent" | "good" | "fair" | "poor"
+  /** επιμέρους βαθμοί (0–1) για γωνία τομής, μέγεθος έλλειψης, σύγκλιση */
+  qualityParts: { angle: number; ellipse: number; convergence: number }
+}
+
+/** Αρχική διόπτευση (μοίρες από Βορρά, δεξιόστροφα) από σημείο Α προς Β. */
+export function bearingBetween(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const deg = Math.PI / 180
+  const phi1 = lat1 * deg
+  const phi2 = lat2 * deg
+  const dLam = (lon2 - lon1) * deg
+  const y = Math.sin(dLam) * Math.cos(phi2)
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLam)
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360
 }
 
 export function triangulate(stations: TriStation[], angularUncertaintyDeg = 3): TriResult | null {
@@ -886,6 +905,10 @@ export function triangulate(stations: TriStation[], angularUncertaintyDeg = 3): 
     ellipsePolygon: [],
     intersections: [],
     angularUncertaintyDeg,
+    bestCrossAngleDeg: 0,
+    qualityScore: 0,
+    qualityGrade: "poor",
+    qualityParts: { angle: 0, ellipse: 0, convergence: 0 },
   })
 
   // Βήμα 1: αρχική εκτίμηση με ίσα βάρη
@@ -988,6 +1011,24 @@ export function triangulate(stations: TriStation[], angularUncertaintyDeg = 3): 
   const [elat, elon] = toLatLon(px, py)
   const orientationDeg = (((90 - (phi * 180) / Math.PI) % 360) + 360) % 360
 
+  // ── Δείκτης ποιότητας γεωμετρίας ─────────────────────────────
+  // Καλύτερη γωνία τομής μεταξύ όλων των ζευγών (πλησιέστερη στις 90°).
+  let bestCross = 0
+  for (let i = 0; i < valid.length; i++) {
+    for (let j = i + 1; j < valid.length; j++) {
+      let diff = Math.abs(valid[i].bearingDeg - valid[j].bearingDeg) % 180
+      const acute = Math.min(diff, 180 - diff) // 0..90
+      if (acute > bestCross) bestCross = acute
+    }
+  }
+  // Επιμέρους βαθμοί 0..1
+  const angleScore = Math.sin((bestCross * Math.PI) / 180) // 1 στις 90°, 0 σε παράλληλες
+  const ellipseScore = 1 / (1 + semiMajor / 50) // 0.5 στα 50 m ημιάξονα
+  const convergenceScore = 1 / (1 + rms / 5) // 0.5 στα 5 m RMS
+  const qualityScore = Math.round(100 * (0.45 * angleScore + 0.3 * ellipseScore + 0.25 * convergenceScore))
+  const qualityGrade: TriResult["qualityGrade"] =
+    qualityScore >= 80 ? "excellent" : qualityScore >= 60 ? "good" : qualityScore >= 40 ? "fair" : "poor"
+
   return {
     ok: true,
     reason: null,
@@ -1002,5 +1043,9 @@ export function triangulate(stations: TriStation[], angularUncertaintyDeg = 3): 
     ellipsePolygon: poly,
     intersections: inter,
     angularUncertaintyDeg,
+    bestCrossAngleDeg: bestCross,
+    qualityScore,
+    qualityGrade,
+    qualityParts: { angle: angleScore, ellipse: ellipseScore, convergence: convergenceScore },
   }
 }
