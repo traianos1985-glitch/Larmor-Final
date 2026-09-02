@@ -48,7 +48,7 @@ import { HistoryPanel, type Measurement } from "./history-panel"
 import { ExportButtons } from "./export-buttons"
 import { TriangulationPanel } from "./triangulation-panel"
 
-export function Calculator() {
+export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
   // Location / field
   const [lat, setLat] = useState(37.9838)
   const [lon, setLon] = useState(23.7275)
@@ -470,7 +470,9 @@ export function Calculator() {
         setObservedLon={setObservedLon}
       />
 
-      <Panel step="7" className="order-last" title="Τελική χαρτογράφηση & πειραματική εκτίμηση θέσης" desc="Αφού επιλέξεις υλικό, πεδίο και συχνότητα, κατέγραψε τη γεννήτρια και το σημείο που δείχνουν οι βέργες. Η απόσταση και η διόπτευση είναι πειραματικές εκτιμήσεις.">
+      {tab === "mapping" && (
+        <>
+      <Panel step="7" title="Τελική χαρτογράφηση & πειραματική εκτίμηση θέσης" desc="Αφού επιλέξεις υλικό, πεδίο και συχνότητα, κατέγραψε τη γεννήτρια και το σημείο που δείχνουν οι βέργες. Η απόσταση και η διόπτευση είναι πειραματικές εκτιμήσεις.">
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Γεννήτρια · πλάτος" htmlFor="generator-lat" warn={validateLat(generatorLat)}><input id="generator-lat" type="number" step="0.000001" min={-90} max={90} className={inputClass} value={generatorLat} onChange={(e) => applyGeneratorLat(Number.parseFloat(e.target.value) || 0)} /></Field>
@@ -533,7 +535,7 @@ export function Calculator() {
         {/* Ανάλυση δεικτών ποιότητας — διαφανής, αντί ενός αδιαφανούς ποσοστού */}
         <div className="mt-4 rounded-sm border border-panel-line bg-readout p-3.5">
           <p className="mb-3 flex items-center justify-between gap-2 font-mono text-[0.72rem]">
-            <span className="uppercase tracking-wide text-muted-foreground">Δείκτες ποιότητας μέτρησης</span>
+            <span className="uppercase tracking-wide text-muted-foreground">Δείκτες ποι��τητας μέτρησης</span>
             <span
               className={
                 "rounded-sm border px-2 py-0.5 " +
@@ -576,7 +578,11 @@ export function Calculator() {
         currentGenerator={{ lat: generatorLat, lon: generatorLon }}
         currentBearing={endpoint.bearingDeg}
       />
+        </>
+      )}
 
+      {tab === "calc" && (
+        <>
       {/* Section 1 result — Larmor */}
       <Panel
         id="section-larmor"
@@ -646,7 +652,7 @@ export function Calculator() {
       <Panel
         step="2"
         title="Αρμονικές"
-        desc="Ακέ��αια πολλαπλάσια της θεμελιώδους συχνότητας. Κάνε κλικ σε γραμμή του φάσματος για επιλογή αρμονικής."
+        desc="Ακέ��αια πολλαπλάσια της θεμελιώδο��ς συχνότητας. Κάνε κλικ σε γραμμή του φάσματος για επιλογή αρμονικής."
       >
         <Field label="Πλήθος εμφανιζόμενων αρμονικών (n)" htmlFor="maxharm">
           <input
@@ -1036,7 +1042,7 @@ export function Calculator() {
               }
             >
               {refraction.mainRow.is_TIR ? (
-                <>⚠ Ολική Εσωτερική Ανάκλαση — Drift vector μη υπολογίσιμο. Μείωσε θ₁ ή επίλεξε έδαφος χαμηλότερης ε_r.</>
+                <>⚠ Ολική Εσωτερική ��νάκλαση — Drift vector μη υπολογίσιμο. Μείωσε θ₁ ή επίλεξε έδαφος χαμηλότερης ε_r.</>
               ) : (
                 <>
                   🧭 Εκτιμώμενο drift vector: {refraction.mainRow.x_total.toFixed(2)} m κατά μήκος άξονα {drift.axis_label}.
@@ -1059,6 +1065,8 @@ export function Calculator() {
       <HistoryPanel lat={lat} lon={lon} capture={captureMeasurement} />
 
       <ExportButtons state={exportState} />
+        </>
+      )}
     </div>
   )
 }

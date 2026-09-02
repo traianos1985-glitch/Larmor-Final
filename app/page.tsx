@@ -1,6 +1,16 @@
+"use client"
+
+import { useState } from "react"
 import { Calculator } from "@/components/larmor/calculator"
 
+const TABS = [
+  { id: "calc" as const, label: "Υπολογισμός", hint: "Larmor · αρμονικές · διάθλαση" },
+  { id: "mapping" as const, label: "Χαρτογράφηση & Τριγωνισμός", hint: "§7 · §8" },
+]
+
 export default function Page() {
+  const [tab, setTab] = useState<"calc" | "mapping">("calc")
+
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-5 px-4 py-6 md:px-6 md:py-10">
       <header className="flex flex-col gap-4 border-b border-panel-line pb-5">
@@ -40,9 +50,38 @@ export default function Page() {
           <span className="font-mono text-foreground">f = γ · B</span> για κοινά μέταλλα, με ζωντανό γεωμαγνητικό πεδίο,
           αρμονικές, βάθος διείσδυσης και μοντέλο διάθλασης.
         </p>
+
+        {/* Καρτέλες πλοήγησης — εναλλαγή μεταξύ κύριου υπολογισμού και χαρτογράφησης/τριγωνισμού */}
+        <nav aria-label="Ενότητες εφαρμογής" className="flex flex-wrap gap-2">
+          {TABS.map((t) => {
+            const active = tab === t.id
+            return (
+              <button
+                key={t.id}
+                type="button"
+                aria-current={active ? "page" : undefined}
+                onClick={() => setTab(t.id)}
+                className={
+                  "flex flex-col items-start rounded-sm border px-3.5 py-2 text-left transition-colors " +
+                  (active
+                    ? "border-brass bg-secondary/50 text-phosphor"
+                    : "border-panel-line text-muted-foreground hover:border-brass-dim hover:text-foreground")
+                }
+              >
+                <span className="font-mono text-[0.78rem] font-semibold uppercase tracking-wide">
+                  {active ? "▸ " : ""}
+                  {t.label}
+                </span>
+                <span className="font-mono text-[0.62rem] uppercase tracking-wider text-muted-foreground">
+                  {t.hint}
+                </span>
+              </button>
+            )
+          })}
+        </nav>
       </header>
 
-      <Calculator />
+      <Calculator tab={tab} />
 
       <footer className="mt-2 flex flex-col gap-2 border-t border-panel-line pt-5 text-xs leading-relaxed text-muted-foreground">
         <p className="text-pretty">
