@@ -43,6 +43,7 @@ import { Compass, RayDiagram } from "./drift-visuals"
 import { LocationPanel, type GeomagResult } from "./location-panel"
 import { HistoryPanel, type Measurement } from "./history-panel"
 import { ExportButtons } from "./export-buttons"
+import { TriangulationPanel } from "./triangulation-panel"
 
 export function Calculator() {
   // Location / field
@@ -557,6 +558,11 @@ export function Calculator() {
           </p>
         </div>
       </Panel>
+
+      <TriangulationPanel
+        currentGenerator={{ lat: generatorLat, lon: generatorLon }}
+        currentBearing={endpoint.bearingDeg}
+      />
 
       {/* Section 1 result — Larmor */}
       <Panel

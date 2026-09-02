@@ -637,3 +637,260 @@ export function computeMeasurementQuality(input: QualityInput): MeasurementQuali
 
   return { score, grade, gradeStatus, factors }
 }
+
+/* ============================================================
+   ΤΡΙΓΩΝΙΣΜΟΣ — Σύγκλιση πολλαπλών μετρήσεων
+   Από 2-3+ θέσεις γεννήτριας, καθεμιά με μια διεύθυνση (διόπτευση)
+   προς τον στόχο, υπολογίζεται το σημείο τομής των διευθύνσεων με
+   σταθμισμένη μέθοδο ελαχίστων τετραγώνων και εκτιμάται η «ζώνη
+   αβεβαιότητας» (error ellipse 95%) γύρω από το εκτιμώμενο σημείο.
+
+   Μέθοδος:
+   - Προβολή σε τοπικό εφαπτόμενο επίπεδο ENU (equirectangular).
+   - Κάθε διεύθυνση i ορίζει ευθεία με κάθετο μοναδιαίο διάνυσμα nᵢ·
+     ελαχιστοποιούμε Σ wᵢ (nᵢ·(p − sᵢ))².
+   - Βάρη wᵢ = 1/σ⊥ᵢ² με σ⊥ᵢ = ρᵢ·σθ (γωνιακή αβεβαιότητα × απόσταση).
+   - Συνδιακύμανση C = (Σ wᵢ nᵢnᵢᵀ)⁻¹ → ιδιοτιμές → ημιάξονες έλλειψης.
+   - Κλίμακα 95% (χ² 2 β.ε.): k = √5.991 ≈ 2.4477.
+============================================================ */
+const R_EARTH_M = 6371000
+
+/** Σημείο προορισμού από αρχικό σημείο, διόπτευση και απόσταση (great-circle). */
+export function destinationPoint(
+  lat: number,
+  lon: number,
+  bearingDeg: number,
+  distanceKm: number,
+): [number, number] {
+  const R = 6371
+  const d = distanceKm / R
+  const br = (bearingDeg * Math.PI) / 180
+  const phi1 = (lat * Math.PI) / 180
+  const lam1 = (lon * Math.PI) / 180
+  const phi2 = Math.asin(Math.sin(phi1) * Math.cos(d) + Math.cos(phi1) * Math.sin(d) * Math.cos(br))
+  const lam2 = lam1 + Math.atan2(Math.sin(br) * Math.sin(d) * Math.cos(phi1), Math.cos(d) - Math.sin(phi1) * Math.sin(phi2))
+  return [(phi2 * 180) / Math.PI, (((lam2 * 180) / Math.PI + 540) % 360) - 180]
+}
+
+export interface TriStation {
+  id: string
+  lat: number
+  lon: number
+  /** διόπτευση προς τον στόχο (μοίρες από Βορρά, δεξιόστροφα) */
+  bearingDeg: number
+}
+
+export interface TriResult {
+  ok: boolean
+  reason: string | null
+  /** εκτιμώμενη θέση στόχου */
+  lat: number
+  lon: number
+  /** ημιάξονες έλλειψης 95% (m) */
+  semiMajorM: number
+  semiMinorM: number
+  /** διόπτευση μεγάλου άξονα (μοίρες από Βορρά) */
+  orientationDeg: number
+  /** εμβαδόν ζώνης αβεβαιότητας 95% (m²) */
+  areaM2: number
+  /** RMS κάθετο υπόλοιπο (m) — πόσο καλά συγκλίνουν οι διευθύνσεις */
+  rmsResidualM: number
+  stationCount: number
+  /** πολύγωνο έλλειψης ως [lat, lon] για χάρτη */
+  ellipsePolygon: Array<[number, number]>
+  /** σημεία τομής ανά ζεύγος διευθύνσεων (για οπτικοποίηση διασποράς) */
+  intersections: Array<{ lat: number; lon: number }>
+  angularUncertaintyDeg: number
+}
+
+export function triangulate(stations: TriStation[], angularUncertaintyDeg = 3): TriResult | null {
+  const valid = stations.filter(
+    (s) => Number.isFinite(s.lat) && Number.isFinite(s.lon) && Number.isFinite(s.bearingDeg),
+  )
+  if (valid.length < 2) return null
+
+  const lat0 = valid.reduce((a, v) => a + v.lat, 0) / valid.length
+  const lon0 = valid.reduce((a, v) => a + v.lon, 0) / valid.length
+  const cosLat0 = Math.cos((lat0 * Math.PI) / 180) || 1e-6
+  const deg = Math.PI / 180
+
+  const toLocal = (lat: number, lon: number) => ({
+    x: R_EARTH_M * cosLat0 * (lon - lon0) * deg, // east (m)
+    y: R_EARTH_M * (lat - lat0) * deg, // north (m)
+  })
+  const toLatLon = (x: number, y: number): [number, number] => [
+    lat0 + y / R_EARTH_M / deg,
+    lon0 + x / (R_EARTH_M * cosLat0) / deg,
+  ]
+
+  const locals = valid.map((s) => {
+    const p = toLocal(s.lat, s.lon)
+    const th = s.bearingDeg * deg
+    return {
+      x: p.x,
+      y: p.y,
+      dE: Math.sin(th), // διεύθυνση προς στόχο (east)
+      dN: Math.cos(th), // (north)
+      nE: Math.cos(th), // κάθετο στην ευθεία
+      nN: -Math.sin(th),
+    }
+  })
+
+  const solve = (weights: number[]) => {
+    let a11 = 0,
+      a12 = 0,
+      a22 = 0,
+      b1 = 0,
+      b2 = 0
+    locals.forEach((l, i) => {
+      const w = weights[i]
+      const c = l.nE * l.x + l.nN * l.y
+      a11 += w * l.nE * l.nE
+      a12 += w * l.nE * l.nN
+      a22 += w * l.nN * l.nN
+      b1 += w * l.nE * c
+      b2 += w * l.nN * c
+    })
+    const det = a11 * a22 - a12 * a12
+    if (Math.abs(det) < 1e-12) return null
+    return {
+      px: (a22 * b1 - a12 * b2) / det,
+      py: (-a12 * b1 + a11 * b2) / det,
+      cxx: a22 / det,
+      cxy: -a12 / det,
+      cyy: a11 / det,
+    }
+  }
+
+  const empty = (reason: string): TriResult => ({
+    ok: false,
+    reason,
+    lat: lat0,
+    lon: lon0,
+    semiMajorM: 0,
+    semiMinorM: 0,
+    orientationDeg: 0,
+    areaM2: 0,
+    rmsResidualM: 0,
+    stationCount: valid.length,
+    ellipsePolygon: [],
+    intersections: [],
+    angularUncertaintyDeg,
+  })
+
+  // Βήμα 1: αρχική εκτίμηση με ίσα βάρη
+  const first = solve(locals.map(() => 1))
+  if (!first) {
+    return empty(
+      "Οι διευθύνσεις είναι σχεδόν παράλληλες — δεν ορίζεται σαφές σημείο τομής. Μετακίνησε τις θέσεις γεννήτριας ή άλλαξε τις διοπτεύσεις.",
+    )
+  }
+
+  // Βήμα 2: σταθμισμένη λύση — βάρη 1/σ⊥² με σ⊥ = ρ·σθ
+  const sigThRad = Math.max(0.1, angularUncertaintyDeg) * deg
+  const weights = locals.map((l) => {
+    const rho = Math.hypot(first.px - l.x, first.py - l.y)
+    const sigPerp = Math.max(0.5, rho * sigThRad)
+    return 1 / (sigPerp * sigPerp)
+  })
+  const sol = solve(weights) ?? first
+  const px = sol.px
+  const py = sol.py
+
+  // Υπόλοιπα (κάθετη απόσταση κάθε ευθείας από το σημείο)
+  let ssr = 0
+  locals.forEach((l) => {
+    const r = l.nE * (px - l.x) + l.nN * (py - l.y)
+    ssr += r * r
+  })
+  const rms = Math.sqrt(ssr / valid.length)
+
+  // Συνδιακύμανση· κλιμάκωση με χ²/β.ε. όταν είναι υπερκαθορισμένο (>2 σταθμοί)
+  let cxx = sol.cxx
+  let cxy = sol.cxy
+  let cyy = sol.cyy
+  if (valid.length > 2) {
+    let chi = 0
+    locals.forEach((l, i) => {
+      const r = l.nE * (px - l.x) + l.nN * (py - l.y)
+      chi += weights[i] * r * r
+    })
+    const scale = chi / (valid.length - 2)
+    if (Number.isFinite(scale) && scale > 0) {
+      cxx *= scale
+      cxy *= scale
+      cyy *= scale
+    }
+  }
+
+  // Ιδιοανάλυση της 2×2 συμμετρικής C
+  const tr = cxx + cyy
+  const det2 = cxx * cyy - cxy * cxy
+  const disc = Math.sqrt(Math.max(0, (tr / 2) * (tr / 2) - det2))
+  const l1 = tr / 2 + disc
+  const l2 = Math.max(0, tr / 2 - disc)
+  let vx: number
+  let vy: number
+  if (Math.abs(cxy) > 1e-12) {
+    vx = l1 - cyy
+    vy = cxy
+  } else {
+    vx = cxx >= cyy ? 1 : 0
+    vy = cxx >= cyy ? 0 : 1
+  }
+  const vnorm = Math.hypot(vx, vy) || 1
+  vx /= vnorm
+  vy /= vnorm
+  const phi = Math.atan2(vy, vx) // γωνία μεγάλου άξονα στο ENU (από east, ccw)
+
+  const k95 = Math.sqrt(5.991) // 95% CI, 2 β.ε.
+  const semiMajor = k95 * Math.sqrt(l1)
+  const semiMinor = k95 * Math.sqrt(l2)
+
+  // Πολύγωνο έλλειψης
+  const N = 48
+  const poly: Array<[number, number]> = []
+  for (let k = 0; k <= N; k++) {
+    const t = (2 * Math.PI * k) / N
+    const ex = semiMajor * Math.cos(t)
+    const ey = semiMinor * Math.sin(t)
+    const x = px + ex * Math.cos(phi) - ey * Math.sin(phi)
+    const y = py + ex * Math.sin(phi) + ey * Math.cos(phi)
+    poly.push(toLatLon(x, y))
+  }
+
+  // Σημεία τομής ανά ζεύγος
+  const inter: Array<{ lat: number; lon: number }> = []
+  for (let i = 0; i < locals.length; i++) {
+    for (let j = i + 1; j < locals.length; j++) {
+      const A = locals[i]
+      const B = locals[j]
+      const det = -A.dE * B.dN + B.dE * A.dN
+      if (Math.abs(det) < 1e-9) continue
+      const rx = B.x - A.x
+      const ry = B.y - A.y
+      const tA = (-rx * B.dN + B.dE * ry) / det
+      const [la, lo] = toLatLon(A.x + tA * A.dE, A.y + tA * A.dN)
+      inter.push({ lat: la, lon: lo })
+    }
+  }
+
+  const [elat, elon] = toLatLon(px, py)
+  const orientationDeg = (((90 - (phi * 180) / Math.PI) % 360) + 360) % 360
+
+  return {
+    ok: true,
+    reason: null,
+    lat: elat,
+    lon: elon,
+    semiMajorM: semiMajor,
+    semiMinorM: semiMinor,
+    orientationDeg,
+    areaM2: Math.PI * semiMajor * semiMinor,
+    rmsResidualM: rms,
+    stationCount: valid.length,
+    ellipsePolygon: poly,
+    intersections: inter,
+    angularUncertaintyDeg,
+  }
+}
