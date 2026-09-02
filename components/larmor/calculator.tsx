@@ -23,6 +23,8 @@ import {
   computeComplexN,
   computeGprPropagation,
   computeSnell,
+  metalSkinResponse,
+  effectiveReflectionDepthM,
   computeDriftDirection,
   distanceAndBearingKm,
   computeDipoleField,
@@ -290,21 +292,25 @@ export function Calculator() {
       if (!f || f <= 0) return null
       const { n_r, loss_tangent, skin_depth_m } = computeComplexN(epsilon_r, sigma, f)
       const { theta2_deg, is_TIR, theta_c_deg } = computeSnell(n_r, sec6Theta)
-      const x_exit = targetDepth * Math.tan(theta1_rad)
+      // Halo shell: ισχυρός ανακλαστήρας → ανάκλαση σε φλούδα μία ακτίνα πιο ρηχά.
+      const deltaMetalRow = skinDepth(f, mat.sigma, mat.muR)
+      const metalResp = metalSkinResponse(rMm, deltaMetalRow)
+      const { depth: d_eff, shift: halo_shift } = effectiveReflectionDepthM(targetDepth, rMm, metalResp)
+      const x_exit = d_eff * Math.tan(theta1_rad)
       const x_total = is_TIR ? x_exit : x_exit + sec6H * Math.tan(((theta2_deg as number) * Math.PI) / 180)
       const v_soil = 3e8 / n_r
       const lambda = v_soil / f
-      const r_fresnel = Math.sqrt(lambda * targetDepth)
-      const propagation = computeGprPropagation(epsilon_r, sigma, f, Math.hypot(targetDepth, x_total))
+      const r_fresnel = Math.sqrt(lambda * d_eff)
+      const propagation = computeGprPropagation(epsilon_r, sigma, f, Math.hypot(d_eff, x_total))
       const atten_db = propagation.attenuationDb
-      return { label, n_r, loss_tangent, theta2_deg, is_TIR, theta_c_deg, x_exit, x_total, r_fresnel, atten_db, f, skin_depth_m, propagation }
+      return { label, n_r, loss_tangent, theta2_deg, is_TIR, theta_c_deg, x_exit, x_total, r_fresnel, atten_db, f, skin_depth_m, propagation, d_eff, halo_shift, metalResp }
     }
 
     const rows = bands.map((b) => computeRow(b.label, b.f)).filter(Boolean) as any[]
     const mainRow = computeRow(genRowLabel, fSelected)
     const selectedLabel = generatorFrequencyIsAuto ? (selectedBand?.label ?? null) : null
     return { rows, mainRow, selectedLabel, epsilon_r, sigma }
-  }, [sec6Soil, sec6Theta, targetDepth, sec6H, bands, fSelected, genRowLabel, generatorFrequencyIsAuto, selectedBand])
+  }, [sec6Soil, sec6Theta, targetDepth, sec6H, bands, fSelected, genRowLabel, generatorFrequencyIsAuto, selectedBand, mat, rMm])
 
   const drift = useMemo(
     () => computeDriftDirection(dipoleAxis, geomag.D),
@@ -345,7 +351,7 @@ export function Calculator() {
   }
 
   // Κεντρικός υπολογισμός γεωμαγνητικού πεδίου για ένα σημείο — ώστε κάθε αλλαγή
-  // συντεταγμένων (χάρτης, τρέχουσα θέση, χειροκίνητη πληκτρολόγη��η) να ενημερώνει το B.
+  // συντεταγμένων (χάρτης, τρέχουσα θέση, χειροκίνητ�� πληκτρολόγη��η) να ενημερώνει το B.
   function computeFieldAt(la: number, lo: number) {
     if (!Number.isFinite(la) || !Number.isFinite(lo)) return
     const uT = computeDipoleField(la, lo)
@@ -965,6 +971,17 @@ export function Calculator() {
               <Readout label="Ολική απόκλιση" value={refraction.mainRow.x_total.toFixed(2)} unit="m" tone="brass" />
               <Readout label="Ζώνη Fresnel" value={refraction.mainRow.r_fresnel.toFixed(2)} unit="m" />
             </div>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <Readout label="Ενεργό βάθος ανάκλασης d_eff" value={refraction.mainRow.d_eff.toFixed(3)} unit="m" />
+              <Readout label="Μετατόπιση φλούδας (halo)" value={(refraction.mainRow.halo_shift * 100).toFixed(1)} unit="cm" tone="brass" />
+              <Readout label="Απόκριση skin μετάλλου" value={(refraction.mainRow.metalResp * 100).toFixed(1)} unit="%" />
+            </div>
+            <p className="mt-2 font-mono text-[0.7rem] leading-relaxed text-muted-foreground">
+              {refraction.mainRow.metalResp > 0.5
+                ? `Ισχυρός ανακλαστήρας: η ανάκλαση γίνεται σε επιφανειακή φλούδα ~${(refraction.mainRow.halo_shift * 100).toFixed(1)} cm πιο ρηχά από το κέντρο, μειώνοντας ελαφρώς το drift κατά ~${((refraction.mainRow.x_exit - targetDepth * Math.tan((sec6Theta * Math.PI) / 180)) * 100).toFixed(1)} cm.`
+                : "Ασθενής/διαπερατός στόχος: το κύμα περνά μέσα και ανακλάται ουσιαστικά στο κέντρο — αμελητέα μετατόπιση φλούδας."}
+            </p>
 
             <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_auto]">
               <div className="overflow-hidden rounded-sm border border-panel-line bg-readout p-2">

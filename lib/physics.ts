@@ -318,6 +318,41 @@ export function computeGprPropagation(epsilon_r: number, sigma: number, f: numbe
   }
 }
 
+/* ------------------------------------------------------------
+   HALO SHELL — Ενεργό βάθος ανάκλασης λόγω μάζας/όγκου στόχου
+   ------------------------------------------------------------
+   Το x_total καθορίζεται από το έδαφος και τη γεωμετρία (n_r, d, h, θ₁).
+   Η μάζα ΔΕΝ αλλάζει τη θ₂· επηρεάζει ΠΟΥ γίνεται η ανάκλαση:
+
+   • Ισχυρός ανακλαστήρας (ευγενή μέταλλα, δ_metal ~ 1 µm): ολική ανάκλαση
+     σε λεπτή επιφανειακή «φλούδα» στην ΚΟΡΥΦΗ του στόχου — δηλαδή μία
+     ισοδύναμη ακτίνα r πιο ΡΗΧΑ από το γεωμετρικό κέντρο.
+   • Ασθενής/διαπερατός στόχος (ίχνος Βορίου, δ_metal ≫ πάχος): το κύμα
+     περνά μέσα και «βλέπει» ουσιαστικά το κέντρο — καμία μετατόπιση φλούδας.
+
+   Η μετατόπιση σταθμίζεται με την απόκριση skin του μετάλλου
+   metalResp = 1 − e^(−t/δ_metal) ∈ [0,1]:
+     d_eff = max(0, d − metalResp · r)
+   Έτσι το x_exit = d_eff·tan(θ₁) μειώνεται ελαφρώς (ρηχότερη ανάκλαση),
+   που εξηγεί το μικρό αρνητικό drift της «πλήρους» περίπτωσης.
+*/
+export function metalSkinResponse(radiusMm: number, deltaMetalM: number): number {
+  const t = Math.max(0, radiusMm) / 1000
+  if (!isFinite(deltaMetalM) || deltaMetalM <= 0 || t <= 0) return 0
+  return 1 - Math.exp(-t / deltaMetalM)
+}
+
+export function effectiveReflectionDepthM(
+  centerDepthM: number,
+  radiusMm: number,
+  metalResp: number,
+): { depth: number; shift: number } {
+  const rM = Math.max(0, radiusMm) / 1000
+  const resp = Math.max(0, Math.min(1, metalResp))
+  const shift = resp * rM
+  return { depth: Math.max(0, centerDepthM - shift), shift }
+}
+
 export function computeSnell(n_r: number, theta1_deg: number) {
   const theta1 = (theta1_deg * Math.PI) / 180
   const theta_c = Math.asin(Math.min(1, 1 / n_r))
