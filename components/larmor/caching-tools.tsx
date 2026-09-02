@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react"
 import { Panel, Field, Readout, inputClass, selectClass } from "./primitives"
 import { destinationPoint, distanceAndBearingKm, validateLat, validateLon } from "@/lib/physics"
+import { CacheReport, SiteSelector, PackagingPlanner, RecoveryPlanner } from "./caching-planners"
 
 /**
  * §10 — Εργαλεία εντοπισμού & δόγμα κρύπτης.
@@ -16,13 +17,17 @@ import { destinationPoint, distanceAndBearingKm, validateLat, validateLon } from
  *   4. Οδηγός υποβρύχιας απόκρυψης (§1-4e / §3-2 Submersion).
  */
 
-type ToolId = "reverse" | "disturbed" | "size" | "submersion"
+type ToolId = "reverse" | "disturbed" | "size" | "submersion" | "report" | "siteselect" | "packaging" | "recovery"
 
 const TOOLS: { id: ToolId; label: string; hint: string }[] = [
   { id: "reverse", label: "Αντίστροφος εντοπισμός", hint: "§1-5 · σημεία αναφοράς" },
   { id: "disturbed", label: "Ενδείξεις εδάφους", hint: "§3 · §4 · checklist" },
   { id: "size", label: "Βάθος & μέγεθος", hint: "§3-1 · διαστάσεις λάκκου" },
   { id: "submersion", label: "Υποβρύχια απόκρυψη", hint: "§3-2 · μέθοδος βύθισης" },
+  { id: "report", label: "Αναφορά 12 σημείων", hint: "Παράρτημα Α · cache report" },
+  { id: "siteselect", label: "Επιλογή θέσης", hint: "§1-4 · κριτήρια & κατάταξη" },
+  { id: "packaging", label: "Συσκευασία & υγρασία", hint: "Κεφ. 2 · packaging" },
+  { id: "recovery", label: "Σχεδιασμός ανάκτησης", hint: "Κεφ. 4 · recovery" },
 ]
 
 // ───────────────────────── Tool 1: Αντίστροφος εντοπισμός ─────────────────────────
@@ -459,7 +464,7 @@ function CacheSize() {
       </div>
 
       <p className="rounded-sm border border-panel-line bg-readout px-3.5 py-3 font-mono text-[0.64rem] leading-relaxed text-muted-foreground">
-        Πρακτική σημασία: ο ερευνητής ξέρει έτσι πόσο <span className="text-foreground">βαθιά & πλατιά</span> να ψάξει
+        Πρακτική σημασία: ο ερευνητής ξέρει έτσ�� πόσο <span className="text-foreground">βαθιά & πλατιά</span> να ψάξει
         και τι όγκο <span className="text-foreground">διαταραγμένου εδάφους</span> να αναζητά. Το «βάθος στόχου» της §3
         είναι διαφορετική εκτίμηση (ανάκλαση σήματος) — εδώ υπολογίζεται ο γεωμετρικός λάκκος του δόγματος.
       </p>
@@ -604,8 +609,9 @@ export function CachingToolsPanel({
       title="Εργαλεία εντοπισμού & δόγμα κρύπτης"
       desc={
         <>
-          Επέκταση της §9 με πρακτικά εργαλεία από το εγχειρίδιο <em>Caching Techniques</em>: αντίστροφος εντοπισμός από
-          σημεία αναφοράς, checklist διαταραγμένου εδάφους, εκτίμηση διαστάσεων λάκκου και οδηγός υποβρύχιας απόκρυψης.
+          Επέκταση της §9 με πρακτικά εργαλεία από το εγχειρίδιο <em>Caching Techniques</em>: αντίστροφος εντοπισμός,
+          checklist εδάφους, διαστάσεις λάκκου, υποβρύχια απόκρυψη — και τα εργαλεία δόγματος: αναφορά κρύπτης 12 σημείων,
+          βαθμολόγηση/κατάταξη θέσης, σχεδιαστής συσκευασίας & υγρασίας και σχεδιαστής ανάκτησης.
         </>
       }
     >
@@ -639,6 +645,10 @@ export function CachingToolsPanel({
       {tool === "disturbed" && <DisturbedGround />}
       {tool === "size" && <CacheSize />}
       {tool === "submersion" && <Submersion />}
+      {tool === "report" && <CacheReport targetLat={targetLat} targetLon={targetLon} />}
+      {tool === "siteselect" && <SiteSelector />}
+      {tool === "packaging" && <PackagingPlanner />}
+      {tool === "recovery" && <RecoveryPlanner />}
 
       <p className="mt-4 font-mono text-[0.62rem] leading-relaxed text-muted-foreground">
         Ερμηνευτικά εργαλεία βασισμένα στο δόγμα του εγχειριδίου — δεν αποτελούν βεβαιότητα. Η τελική επιλογή απαιτεί
