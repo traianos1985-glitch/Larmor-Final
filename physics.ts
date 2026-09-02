@@ -1,0 +1,374 @@
+/* ============================================================
+   PHYSICS CORE — Larmor & Αρμονικές
+   Πιστή μεταφορά των τύπων του πρωτότυπου single-file εργαλείου
+   σε καθαρές, δοκιμάσιμες συναρτήσεις TypeScript.
+
+   Πηγές:
+   - γ (γυρομαγνητικός λόγος): IAEA "Recommended Nuclear Magnetic
+     Moments" + CODATA 2018 (kherb.io/docs/nmr_table)
+   - δ = √(2/ωμσ)  (skin depth, standard EM)
+   - n* = √(ε_r − jσ/ωε₀)  (Balanis, Advanced Engineering EM)
+   - x = d·tan(θ₁) + h·tan(θ₂)  (GPR ray-tracing, EPA manual)
+   - r_F = √(λ·d)  (Fresnel zone)
+   - A = −20·d/δ·log₁₀e  dB  (plane-wave attenuation)
+============================================================ */
+
+// Θεμελιώδεις σταθερές — τιμές CODATA 2018 / ορισμοί SI (ακρίβεια IEEE-754 double).
+export const C = 299792458 // m/s — ταχύτητα φωτός στο κενό (ακριβής ορισμός SI)
+export const MU0 = 4 * Math.PI * 1e-7 // H/m — μαγνητική διαπερατότητα κενού (κλασικός ορισμός)
+// ε₀ = 1/(μ₀·c²) — παράγεται από τα μ₀ και c ώστε οι τρεις σταθερές να είναι απόλυτα συνεπείς
+// (= 8.8541878128e-12 F/m, CODATA 2018).
+export const EPSILON_0 = 1 / (MU0 * C * C) // F/m
+
+export interface Material {
+  id: string
+  name: string
+  /** γ/2π σε MHz/T, πλήρης ακρίβεια double */
+  gamma: number
+  /** ηλεκτρική αγωγιμότητα μετάλλου, S/m */
+  sigma: number
+  /** σχετική μαγνητική διαπερατότητα */
+  muR: number
+  /** πυκνότητα, g/cm³ */
+  density: number
+}
+
+export const MATERIALS: Material[] = [
+  { id: "au197", name: "Χρυσός (¹⁹⁷Au)", gamma: 0.7378670245778789, sigma: 4.1e7, muR: 1.0, density: 19.3 },
+  { id: "ag109", name: "Άργυρος (¹⁰⁹Ag)", gamma: 1.9896492846623755, sigma: 6.3e7, muR: 1.0, density: 10.49 },
+  { id: "cu63", name: "Χαλκός (⁶³Cu)", gamma: 11.311420179117773, sigma: 5.96e7, muR: 1.0, density: 8.96 },
+  { id: "al27", name: "Αλουμίνιο (²⁷Al)", gamma: 11.100630067688776, sigma: 3.77e7, muR: 1.0, density: 2.7 },
+  { id: "fe57", name: "Σίδηρος (⁵⁷Fe)", gamma: 1.3818237005731187, sigma: 1.0e7, muR: 5000, density: 7.87 },
+  { id: "sb121", name: "Αντιμόνιο (¹²¹Sb)", gamma: 10.238667225340981, sigma: 2.55e6, muR: 1.0, density: 6.68 },
+  { id: "b11", name: "Βόριο (¹¹B)", gamma: 13.66160796005943, sigma: 1.0e-4, muR: 1.0, density: 2.34 },
+  // Για μη μεταλλικούς στόχους η ηλεκτρική αγωγιμότητα/μr είναι προσεγγιστικές τιμές.
+  // Οι συχνότητες NMR αναφέρονται στα συνηθέστερα φυσικά ισότοπα/πυρήνες.
+  { id: "c12-diamond", name: "Διαμάντι (¹²C)", gamma: 10.705, sigma: 1.0e-12, muR: 1.0, density: 3.515 },
+  { id: "mn55", name: "Μαγγάνιο (⁵⁵Mn)", gamma: 10.576, sigma: 6.94e5, muR: 1.0, density: 7.21 },
+  { id: "ba-no3-2", name: "Νιτρικό βάριο Ba(NO₃)₂ (¹⁴N)", gamma: 3.077, sigma: 1.0e-8, muR: 1.0, density: 3.24 },
+  { id: "n14", name: "Άζωτο (¹⁴N)", gamma: 3.077, sigma: 1.0e-8, muR: 1.0, density: 1.251e-3 },
+]
+
+export function getMaterial(id: string): Material {
+  return MATERIALS.find((m) => m.id === id) ?? MATERIALS[0]
+}
+
+/* ---------- Μονάδες αναφοράς (ιστορικά κειμήλια) ---------- */
+export interface UnitRef {
+  mass_g: number
+  volume_cm3: number
+  label: string
+}
+const UNIT_REFS: Record<string, UnitRef> = {
+  au197: { mass_g: 21960, volume_cm3: 1138, label: "Ιστορικό κειμήλιο Au — 21.960 g / 1.138 cm³ ανά μονάδα" },
+  b11: { mass_g: 2.4, volume_cm3: 1.02, label: "Ίχνος B — 2,4 g / 1,02 cm³ ανά μονάδα" },
+}
+const DEFAULT_REF_VOL_CM3 = 1138
+
+export function getUnitRef(mat: Material): UnitRef {
+  if (UNIT_REFS[mat.id]) return UNIT_REFS[mat.id]
+  const vol = DEFAULT_REF_VOL_CM3
+  return { mass_g: vol * mat.density, volume_cm3: vol, label: `Μονάδα αναφοράς ${vol} cm³ (ίδια γεωμετρία με Au)` }
+}
+
+/** Ισοδύναμη ακτίνα σφαίρας (mm) από συνολικό όγκο n μονάδων. r = (3V/4π)^(1/3) */
+export function effectiveRadiusMm(mat: Material, units: number): number {
+  const ref = getUnitRef(mat)
+  const totalVolM3 = units * ref.volume_cm3 * 1e-6
+  const radiusM = Math.pow((3 * totalVolM3) / (4 * Math.PI), 1 / 3)
+  return radiusM * 1000
+}
+
+/* ------------------------------------------------------------
+   Θεμελιώδης συχνότητα Larmor: f(Hz) = γ[MHz/T] × B[µT]
+   (Math.abs στο B — αρνητικό μέτρο πεδίου δεν έχει φυσικό νόημα)
+------------------------------------------------------------ */
+export function larmorHz(gamma: number, bMicroT: number): number {
+  return gamma * Math.abs(bMicroT || 0)
+}
+
+export function skinDepth(f: number, sigma: number, muR = 1): number {
+  if (f <= 0 || sigma <= 0) return Number.POSITIVE_INFINITY
+  const omega = 2 * Math.PI * f
+  return Math.sqrt(2 / (omega * MU0 * muR * sigma))
+}
+
+/* ---------- Μορφοποίηση ---------- */
+export function fmtFrequency(hz: number): { val: string; unit: string } {
+  if (hz >= 1e6) return { val: (hz / 1e6).toFixed(3), unit: "MHz" }
+  if (hz >= 1e3) return { val: (hz / 1e3).toFixed(3), unit: "kHz" }
+  return { val: hz.toFixed(2), unit: "Hz" }
+}
+
+export function fmtHzOnly(hz: number): string {
+  return hz.toLocaleString("el-GR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " Hz"
+}
+
+export function fmtLength(m: number): string {
+  if (!isFinite(m) || m <= 0) return "—"
+  return m < 1 ? (m * 1000).toFixed(2) + "mm" : m.toFixed(3) + "m"
+}
+
+export function fmtDelta(m: number): string {
+  if (!isFinite(m) || m <= 0) return "—"
+  if (m < 1e-3) return (m * 1e6).toFixed(2) + "µm"
+  if (m < 1) return (m * 1e3).toFixed(2) + "mm"
+  if (m < 1000) return m.toFixed(2) + "m"
+  return (m / 1000).toFixed(2) + "km"
+}
+
+/* ============================================================
+   ΖΩΝΕΣ ΕΝΔΙΑΦΕΡΟΝΤΟΣ
+============================================================ */
+export type Criterion = "2dec" | "firstdec0" | "lastdig0" | "optimal"
+
+export interface BandDef {
+  label: string
+  target: number | null
+  criterion: Criterion
+}
+
+export const BANDS: BandDef[] = [
+  { label: "~50 MHz", target: 50e6, criterion: "2dec" },
+  { label: "~230 MHz", target: 230e6, criterion: "firstdec0" },
+  { label: "~1 GHz", target: 1e9, criterion: "lastdig0" },
+  { label: "~3 GHz", target: 3e9, criterion: "lastdig0" },
+  { label: "~6 GHz", target: 6e9, criterion: "lastdig0" },
+  { label: "★ Βέλτιστος", target: null, criterion: "optimal" },
+]
+
+export function satisfiesCriterion(f: number, criterion: Criterion): boolean {
+  switch (criterion) {
+    case "2dec":
+      return true
+    case "firstdec0":
+      return f % 1 < 0.1
+    case "lastdig0":
+      return Math.round(f) % 10 === 0
+    default:
+      return true
+  }
+}
+
+export function findNearestHarmonic(
+  f0: number,
+  targetHz: number,
+  criterion: Criterion,
+): { n: number; f: number } {
+  if (f0 <= 0 || targetHz <= 0) return { n: 1, f: f0 }
+  const n0 = Math.max(1, Math.round(targetHz / f0))
+  if (criterion === "2dec") return { n: n0, f: f0 * n0 }
+
+  const WINDOW = 250
+  let bestN: number | null = null
+  let bestDist = Number.POSITIVE_INFINITY
+  for (let dn = 0; dn <= WINDOW; dn++) {
+    const candidates = dn === 0 ? [n0] : [n0 + dn, n0 - dn]
+    for (const n of candidates) {
+      if (n < 1) continue
+      const f = f0 * n
+      if (satisfiesCriterion(f, criterion)) {
+        const dist = Math.abs(f - targetHz)
+        if (dist < bestDist) {
+          bestDist = dist
+          bestN = n
+        }
+      }
+    }
+    if (bestN !== null && dn > 15) break
+  }
+  return bestN !== null ? { n: bestN, f: f0 * bestN } : { n: n0, f: f0 * n0 }
+}
+
+/** Βέλτιστη αρμονική: max δ_soil × (1 − e^(−t/δ_metal)) */
+export function findOptimalCombo(
+  f0: number,
+  sigmaSoil: number,
+  mat: Material,
+  thicknessMm: number,
+): { n: number; f: number; score: number } | null {
+  if (f0 <= 0) return null
+  const t = thicknessMm / 1000
+
+  let fOpt = 1e3
+  if (t > 0 && mat.sigma > 0 && mat.muR > 0) {
+    fOpt = 1 / (Math.PI * MU0 * mat.muR * mat.sigma * t * t)
+  }
+  fOpt = Math.max(f0, Math.min(10e9, fOpt))
+
+  const n0 = Math.max(1, Math.round(fOpt / f0))
+  const WINDOW = 1500
+  let bestN = n0
+  let bestScore = Number.NEGATIVE_INFINITY
+
+  for (let dn = -WINDOW; dn <= WINDOW; dn++) {
+    const n = n0 + dn
+    if (n < 1) continue
+    const f = f0 * n
+    const omega = 2 * Math.PI * f
+    const dSoil = sigmaSoil > 0 ? Math.sqrt(2 / (omega * MU0 * sigmaSoil)) : 0
+    const dMetal =
+      mat.sigma > 0 && mat.muR > 0 ? Math.sqrt(2 / (omega * MU0 * mat.muR * mat.sigma)) : Number.POSITIVE_INFINITY
+    const metalResp = isFinite(dMetal) && dMetal > 0 && t > 0 ? 1 - Math.exp(-t / dMetal) : 0
+    const score = dSoil * metalResp
+    if (score > bestScore) {
+      bestScore = score
+      bestN = n
+    }
+  }
+  return { n: bestN, f: f0 * bestN, score: bestScore }
+}
+
+export function fmtBandFrequency(f: number, criterion: Criterion): string {
+  try {
+    switch (criterion) {
+      case "2dec":
+        return f.toLocaleString("el-GR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " Hz"
+      case "firstdec0":
+        return f.toLocaleString("el-GR", { minimumFractionDigits: 7, maximumFractionDigits: 10 }) + " Hz"
+      case "lastdig0":
+        return f.toLocaleString("el-GR", { minimumFractionDigits: 5, maximumFractionDigits: 8 }) + " Hz"
+      default:
+        return f.toLocaleString("el-GR", { minimumFractionDigits: 4, maximumFractionDigits: 10 }) + " Hz"
+    }
+  } catch {
+    return f.toFixed(5) + " Hz"
+  }
+}
+
+/* ============================================================
+   OFFLINE DIPOLE MODEL (fallback)
+   Γεωκεντρικό αξονικό-κεκλιμένο δίπολο (tilted dipole).
+   B(λm) = B0 · √(1 + 3·sin²(λm))   — μέτρο πεδίου στη γεωμαγνητική
+   γεωγρ. πλάτος λm, με B0 το ισημερινό επιφανειακό πεδίο του διπόλου.
+
+   Παράμετροι από IGRF-13 (εποχή 2020):
+   - Γεωμαγνητικός βόρειος πόλος (dipole) ≈ 80.65°N, 72.68°W
+   - B0 = m·μ0/(4π R³) ≈ 29 800 nT  (ισημερινό επιφανειακό πεδίο)
+============================================================ */
+export const GEOMAG_POLE = { lat: 80.65, lon: -72.68 }
+const B0_EQUATORIAL_NT = 29800
+
+export function computeDipoleField(latDeg: number, lonDeg: number): number {
+  const toRad = (d: number) => (d * Math.PI) / 180
+  const phi = toRad(latDeg)
+  const phi0 = toRad(GEOMAG_POLE.lat)
+  const dLon = toRad(lonDeg - GEOMAG_POLE.lon)
+  const sinLambdaM = Math.sin(phi) * Math.sin(phi0) + Math.cos(phi) * Math.cos(phi0) * Math.cos(dLon)
+  const lambdaM = Math.asin(Math.max(-1, Math.min(1, sinLambdaM)))
+  const bNT = B0_EQUATORIAL_NT * Math.sqrt(1 + 3 * Math.sin(lambdaM) ** 2)
+  return bNT / 1000 // µT
+}
+
+export function distanceAndBearingKm(lat1: number, lon1: number, lat2: number, lon2: number): { distanceKm: number; bearingDeg: number } {
+  const toRad = (d: number) => (d * Math.PI) / 180
+  const toDeg = (r: number) => (r * 180) / Math.PI
+  const phi1 = toRad(lat1)
+  const phi2 = toRad(lat2)
+  const dPhi = toRad(lat2 - lat1)
+  const dLambda = toRad(lon2 - lon1)
+  const a = Math.sin(dPhi / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2
+  const distanceKm = 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  const y = Math.sin(dLambda) * Math.cos(phi2)
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLambda)
+  return { distanceKm, bearingDeg: (toDeg(Math.atan2(y, x)) + 360) % 360 }
+}
+
+export function computeDipoleInclination(latDeg: number, lonDeg: number): number {
+  const toRad = (d: number) => (d * Math.PI) / 180
+  const phi0 = toRad(GEOMAG_POLE.lat)
+  const dLon = toRad(lonDeg - GEOMAG_POLE.lon)
+  const sinLm = Math.sin(toRad(latDeg)) * Math.sin(phi0) + Math.cos(toRad(latDeg)) * Math.cos(phi0) * Math.cos(dLon)
+  const lambdaM = Math.asin(Math.max(-1, Math.min(1, sinLm)))
+  return (Math.atan(2 * Math.tan(lambdaM)) * 180) / Math.PI
+}
+
+/* ============================================================
+   ΜΟΝΤΕΛΟ ΔΙΑΘΛΑΣΗΣ (Snell / Fresnel / GPR ray-path)
+============================================================ */
+export function computeComplexN(epsilon_r: number, sigma: number, f: number) {
+  const omega = 2 * Math.PI * f
+  const loss_tangent = sigma / (omega * EPSILON_0 * epsilon_r)
+  const sqrtTerm = Math.sqrt(1 + loss_tangent * loss_tangent)
+  const n_r = Math.sqrt((epsilon_r / 2) * (sqrtTerm + 1))
+  const kappa = Math.sqrt((epsilon_r / 2) * (sqrtTerm - 1))
+  const beta = omega * n_r / C
+  const alpha = omega * kappa / C
+  const skin_depth_m = alpha > 0 ? 1 / alpha : Number.POSITIVE_INFINITY
+  return { n_r, kappa, loss_tangent, skin_depth_m, alpha, beta }
+}
+
+/** Lossy-wave propagation for a GPR ray segment. Returns amplitude and phase terms.
+ * This is a plane-wave approximation; antenna pattern, polarization and layered geometry
+ * still require a full Maxwell/GPR forward model.
+ */
+export function computeGprPropagation(epsilon_r: number, sigma: number, f: number, distanceM: number) {
+  const medium = computeComplexN(epsilon_r, sigma, f)
+  const distance = Math.max(0, distanceM)
+  const amplitude = Math.exp(-medium.alpha * distance)
+  const phaseRad = medium.beta * distance
+  const wavelengthM = medium.beta > 0 ? (2 * Math.PI) / medium.beta : Number.POSITIVE_INFINITY
+  return {
+    ...medium,
+    distanceM: distance,
+    amplitude,
+    attenuationDb: 20 * Math.log10(Math.max(amplitude, Number.MIN_VALUE)),
+    phaseRad,
+    wavelengthM,
+  }
+}
+
+export function computeSnell(n_r: number, theta1_deg: number) {
+  const theta1 = (theta1_deg * Math.PI) / 180
+  const theta_c = Math.asin(Math.min(1, 1 / n_r))
+  const sinTheta2 = n_r * Math.sin(theta1)
+  if (sinTheta2 >= 1) {
+    return { theta2_deg: null as number | null, is_TIR: true, theta_c_deg: (theta_c * 180) / Math.PI }
+  }
+  const theta2 = Math.asin(sinTheta2)
+  return { theta2_deg: (theta2 * 180) / Math.PI, is_TIR: false, theta_c_deg: (theta_c * 180) / Math.PI }
+}
+
+export type DipoleAxis = "NS" | "EW"
+
+export function computeDriftDirection(dipoleAxis: DipoleAxis, declination: number) {
+  const D = declination
+  let bearing_mag_1: number, bearing_mag_2: number, axis_label: string, dir1_label: string, dir2_label: string
+  if (dipoleAxis === "NS") {
+    bearing_mag_1 = 90
+    bearing_mag_2 = 270
+    axis_label = "Ανατολή–Δύση (E–W)"
+    dir1_label = "ΑΝΑΤΟΛΙΚΑ"
+    dir2_label = "ΔΥΤΙΚΑ"
+  } else {
+    bearing_mag_1 = 0
+    bearing_mag_2 = 180
+    axis_label = "Βορράς–Νότος (N–S)"
+    dir1_label = "ΒΟΡΕΙΑ"
+    dir2_label = "ΝΟΤΙΑ"
+  }
+  const b1 = (((bearing_mag_1 + D) % 360) + 360) % 360
+  const b2 = (((bearing_mag_2 + D) % 360) + 360) % 360
+  return { bearing1: b1, bearing2: b2, axis_label, dir1_label, dir2_label, D }
+}
+
+/* ---------- Τύποι εδάφους ---------- */
+export interface SoilType {
+  value: string
+  label: string
+  sigma: number
+}
+export const SOIL_TYPES: SoilType[] = [
+  { value: "0.0001", label: "Βραχώδες / ξηρό (σ = 0.0001 S/m)", sigma: 0.0001 },
+  { value: "0.001", label: "Ξηρό / αμμώδες (σ = 0.001 S/m)", sigma: 0.001 },
+  { value: "0.01", label: "Μέτριο / υγρό (σ = 0.01 S/m)", sigma: 0.01 },
+  { value: "0.05", label: "Αργιλώδες / υγρό (σ = 0.05 S/m)", sigma: 0.05 },
+  { value: "0.1", label: "Κορεσμένο / βαλτώδες (σ = 0.1 S/m)", sigma: 0.1 },
+]
+
+/* ---------- Έδαφος για διάθλαση (ε_r | σ) ---------- */
+export const REFRACTION_SOILS = [
+  { value: "4|0.001", label: "Ξηρό / Αμμώδες — ε_r=4, σ=0.001 S/m", eps: 4, sigma: 0.001 },
+  { value: "10|0.01", label: "Μέσο / Μικτό — ε_r=10, σ=0.01 S/m", eps: 10, sigma: 0.01 },
+  { value: "25|0.05", label: "Υγρό / Αργιλώδ��ς — ε_r=25, σ=0.05 S/m", eps: 25, sigma: 0.05 },
+]
