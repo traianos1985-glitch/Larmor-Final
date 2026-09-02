@@ -1,9 +1,28 @@
 "use client"
 
 import { useMemo, useState } from "react"
+import dynamic from "next/dynamic"
 import { Panel, Field, Readout, inputClass, selectClass } from "./primitives"
-import { destinationPoint, distanceAndBearingKm, validateLat, validateLon } from "@/lib/physics"
+import {
+  destinationPoint,
+  distanceAndBearingKm,
+  triangulate,
+  validateLat,
+  validateLon,
+  type TriStation,
+} from "@/lib/physics"
 import { CacheReport, SiteSelector, PackagingPlanner, RecoveryPlanner } from "./caching-planners"
+
+// Επαναχρησιμοποιούμε τον χάρτη του §8 (τριγωνισμός) — η «τομή μετρημένων γραμμών»
+// του §1-5d είναι γεωμετρικά ο ίδιος υπολογισμός: τομή διευθύνσεων από σταθερά σημεία.
+const ReverseLocatorMap = dynamic(() => import("./triangulation-map"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center font-mono text-xs text-muted-foreground">
+      Φόρτωση χάρτη…
+    </div>
+  ),
+})
 
 /**
  * §10 — Εργαλεία εντοπισμού & δόγμα κρύπτης.
@@ -41,6 +60,18 @@ interface FRP {
   distance: number // meters
 }
 
+// Ετικέτες σταθερών σημείων αναφοράς (FRP) — δέντρο, βράχος, αλώνι, πηγάδι κ.λπ.
+const FRP_LETTERS = ["Α", "Β", "Γ", "Δ", "Ε", "Ζ"]
+const MAX_FRPS = FRP_LETTERS.length
+let rlSeq = 0
+const mkFrpId = () => `frp_${Date.now()}_${rlSeq++}`
+
+function fmtArea(m2: number): string {
+  if (!Number.isFinite(m2) || m2 <= 0) return "—"
+  if (m2 < 10000) return m2.toFixed(0) + " m²"
+  return (m2 / 1e6).toFixed(3) + " km²"
+}
+
 function ReverseLocator({
   targetLat,
   targetLon,
@@ -50,32 +81,43 @@ function ReverseLocator({
 }) {
   const [frps, setFrps] = useState<FRP[]>([
     { id: "a", label: "Σημείο αναφοράς Α", lat: 37.9838, lon: 23.7275, azimuth: 90, distance: 8 },
+    { id: "b", label: "Σημείο αναφοράς Β", lat: 37.9841, lon: 23.7279, azimuth: 200, distance: 8 },
   ])
+  // Γωνιακή αβεβαιότητα διόπτευσης — οι σκοπεύσεις με πυξίδα είναι ανακριβείς (§1-5d),
+  // οπότε η προεπιλογή είναι πιο συντηρητική (5°) απ' ό,τι στον τριγωνισμό οργάνων.
+  const [angUnc, setAngUnc] = useState(5)
 
   function update(id: string, patch: Partial<FRP>) {
     setFrps((prev) => prev.map((f) => (f.id === id ? { ...f, ...patch } : f)))
   }
 
   function addFrp() {
-    setFrps((prev) =>
-      prev.length >= 2
-        ? prev
-        : [
-            ...prev,
-            { id: "b", label: "Σημείο αναφοράς Β", lat: targetLat, lon: targetLon, azimuth: 0, distance: 8 },
-          ],
-    )
+    setFrps((prev) => {
+      if (prev.length >= MAX_FRPS) return prev
+      const letter = FRP_LETTERS[prev.length]
+      return [
+        ...prev,
+        {
+          id: mkFrpId(),
+          label: `Σημείο αναφοράς ${letter}`,
+          lat: Number((targetLat || 37.9838).toFixed(6)),
+          lon: Number((targetLon || 23.7275).toFixed(6)),
+          azimuth: 0,
+          distance: 8,
+        },
+      ]
+    })
   }
 
   function removeFrp(id: string) {
     setFrps((prev) => prev.filter((f) => f.id !== id))
   }
 
-  // Κάθε FRP προβάλλει το σημείο σκαψίματος μέσω αζιμουθίου + απόστασης (§1-5d).
+  // Κάθε FRP προβάλλει το σημείο σκαψίματος μέσω αζιμουθίου + απόστασης (§1-5d, μέθοδος 4).
   const projections = useMemo(
     () =>
       frps
-        .filter((f) => Number.isFinite(f.lat) && Number.isFinite(f.lon))
+        .filter((f) => Number.isFinite(f.lat) && Number.isFinite(f.lon) && Number.isFinite(f.azimuth))
         .map((f) => {
           const [lat, lon] = destinationPoint(f.lat, f.lon, f.azimuth, f.distance / 1000)
           return { frp: f, lat, lon }
@@ -83,35 +125,53 @@ function ReverseLocator({
     [frps],
   )
 
-  // Αν υπάρχουν 2 προβολές, ο έλεγχος συνέπειας = απόσταση μεταξύ τους (πρέπει να συμπίπτουν).
-  const consistency = useMemo(() => {
-    if (projections.length < 2) return null
-    const { distanceKm } = distanceAndBearingKm(
-      projections[0].lat,
-      projections[0].lon,
-      projections[1].lat,
-      projections[1].lon,
-    )
-    const midLat = (projections[0].lat + projections[1].lat) / 2
-    const midLon = (projections[0].lon + projections[1].lon) / 2
-    // Βασική γραμμή = απόσταση μεταξύ των δύο FRP (κανόνας 2× baseline).
-    const base = distanceAndBearingKm(frps[0].lat, frps[0].lon, frps[1].lat, frps[1].lon).distanceKm * 1000
-    const maxLine = Math.max(frps[0].distance, frps[1].distance)
-    return { separationM: distanceKm * 1000, midLat, midLon, baseM: base, maxLine }
-  }, [projections, frps])
+  // «Τομή μετρημένων γραμμών» (§1-5d, μέθοδος 3): οι διευθύνσεις (αζιμούθια) από κάθε
+  // FRP προεκτείνονται και το σημείο σκαψίματος είναι η τομή τους. Χρησιμοποιούμε τον
+  // ίδιο σταθμισμένο επιλύτη ελαχίστων τετραγώνων με τον τριγωνισμό οργάνων (§8), που
+  // δίνει και ζώνη αβεβαιότητας 95%.
+  const stations = useMemo<TriStation[]>(
+    () =>
+      frps
+        .filter((f) => Number.isFinite(f.lat) && Number.isFinite(f.lon) && Number.isFinite(f.azimuth))
+        .map((f) => ({ id: f.id, lat: f.lat, lon: f.lon, bearingDeg: f.azimuth })),
+    [frps],
+  )
+  const intersection = useMemo(() => triangulate(stations, angUnc), [stations, angUnc])
+
+  // Έλεγχος κανόνα «2× baseline» (§1-5d) — εφαρμόσιμος όταν υπάρχουν ακριβώς 2 FRP.
+  const baselineCheck = useMemo(() => {
+    if (frps.length !== 2) return null
+    const [a, b] = frps
+    if (![a.lat, a.lon, b.lat, b.lon].every(Number.isFinite)) return null
+    const baseM = distanceAndBearingKm(a.lat, a.lon, b.lat, b.lon).distanceKm * 1000
+    const maxLine = Math.max(a.distance || 0, b.distance || 0)
+    return { baseM, maxLine, exceeds: maxLine > baseM * 2 }
+  }, [frps])
+
+  // Απόκλιση της εκτιμώμενης τομής από τον στόχο του §7 (διασταύρωση).
+  const targetOffset = useMemo(() => {
+    if (!intersection?.ok || !Number.isFinite(targetLat) || !Number.isFinite(targetLon)) return null
+    return distanceAndBearingKm(intersection.lat, intersection.lon, targetLat, targetLon).distanceKm * 1000
+  }, [intersection, targetLat, targetLon])
 
   return (
     <div className="flex flex-col gap-4">
       <p className="font-mono text-[0.72rem] leading-relaxed text-muted-foreground">
-        Αν ο κρύπτης σημάδεψε τη θέση με σταθερά ορόσημα (FRP) + μετρημένη απόσταση/αζιμούθιο, δώσε τα σημεία αναφοράς
-        και υπολόγισε αντίστροφα το σημείο σκαψίματος. Με <span className="text-brass">δύο</span> σημεία αναφοράς οι δύο
-        προβολές πρέπει να συμπίπτουν — η μεταξύ τους απόκλιση δείχνει την ποιότητα του εντοπισμού.
+        Στο πεδίο αναγνωρίζουμε τα <span className="text-foreground">σταθερά σημεία αναφοράς</span> (δέντρο, βράχος,
+        αλώνι, πηγάδι κ.λπ.) και υπολογίζουμε πού μπορεί να έγινε η απόκρυψη. Για κάθε ορόσημο δώσε θέση + διόπτευση
+        (και προαιρετικά απόσταση). Με <span className="text-brass">≥2 ορόσημα</span> το σημείο προκύπτει από την{" "}
+        <span className="text-phosphor">τομή των μετρημένων γραμμών</span> (§1-5d), μαζί με ζώνη αβεβαιότητας 95%.
       </p>
 
-      {frps.map((f) => (
+      {frps.map((f, idx) => (
         <div key={f.id} className="rounded-sm border border-panel-line bg-readout p-3">
           <div className="mb-2 flex items-center justify-between">
-            <span className="font-mono text-[0.74rem] font-semibold text-brass">{f.label}</span>
+            <span className="flex items-center gap-2 font-mono text-[0.74rem] font-semibold text-brass">
+              <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-phosphor-dim font-mono text-[0.6rem] font-bold text-background">
+                {idx + 1}
+              </span>
+              {f.label}
+            </span>
             {frps.length > 1 && (
               <button
                 type="button"
@@ -180,22 +240,39 @@ function ReverseLocator({
         </div>
       ))}
 
-      {frps.length < 2 && (
-        <button
-          type="button"
-          className="self-start rounded-sm border border-brass-dim px-3 py-2 font-mono text-[0.72rem] text-phosphor transition-colors hover:border-brass"
-          onClick={addFrp}
-        >
-          + Προσθήκη 2ου σημείου αναφοράς (τομή μετρημένων γραμμών)
-        </button>
-      )}
+      <div className="flex flex-wrap items-end gap-3">
+        {frps.length < MAX_FRPS && (
+          <button
+            type="button"
+            className="rounded-sm border border-brass-dim px-3 py-2 font-mono text-[0.72rem] text-phosphor transition-colors hover:border-brass"
+            onClick={addFrp}
+          >
+            + Προσθήκη οροσήμου (τομή μετρημένων γραμμών)
+          </button>
+        )}
+        <div className="w-40">
+          <Field label="Αβεβαιότητα διόπτευσης σθ (°)" htmlFor="rl-ang-unc">
+            <input
+              id="rl-ang-unc"
+              type="number"
+              step="0.5"
+              min={0.5}
+              max={30}
+              className={inputClass}
+              value={angUnc}
+              onChange={(e) => setAngUnc(Math.max(0.5, Math.min(30, Number.parseFloat(e.target.value) || 5)))}
+            />
+          </Field>
+        </div>
+      </div>
 
+      {/* Προβολές αζιμουθίου ανά ορόσημο (μέθοδος 4) */}
       {projections.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2">
           {projections.map((p, i) => (
             <Readout
               key={p.frp.id}
-              label={`Προβολή από ${p.frp.label}`}
+              label={`Προβολή αζιμουθίου · ${p.frp.label}`}
               value={`${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`}
               tone={i === 0 ? "phosphor" : "brass"}
             />
@@ -203,28 +280,74 @@ function ReverseLocator({
         </div>
       )}
 
-      {consistency && (
-        <div className="rounded-sm border border-brass-dim/50 bg-secondary/30 px-3.5 py-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Readout label="Απόκλιση δύο προβολών" value={consistency.separationM.toFixed(2)} unit="m" tone={consistency.separationM < 2 ? "phosphor" : "brass"} />
-            <Readout label="Μέσο σημείο (τελική εκτίμηση)" value={`${consistency.midLat.toFixed(6)}, ${consistency.midLon.toFixed(6)}`} tone="muted" />
-          </div>
-          <p className="mt-2.5 font-mono text-[0.66rem] leading-relaxed text-muted-foreground">
-            Κανόνας ακρίβειας (§1-5d): καμία προβαλλόμενη γραμμή δεν πρέπει να ξεπερνά το{" "}
-            <span className="text-foreground">2× της βασικής γραμμής</span> μεταξύ των δύο σημείων αναφοράς (
-            {consistency.baseM.toFixed(1)} m → όριο {(consistency.baseM * 2).toFixed(1)} m).{" "}
-            {consistency.maxLine > consistency.baseM * 2 ? (
-              <span className="text-destructive">Η μεγαλύτερη γραμμή ({consistency.maxLine.toFixed(1)} m) υπερβαίνει το όριο.</span>
-            ) : (
-              <span className="text-phosphor">Εντός ορίου.</span>
-            )}
-          </p>
+      {/* Τομή μετρημένων γραμμών (μέθοδος 3) — εκτίμηση θέσης σκαψίματος */}
+      {intersection && !intersection.ok && (
+        <div
+          className="rounded-sm border px-3.5 py-3 font-mono text-[0.74rem] leading-relaxed"
+          style={{ borderColor: "var(--destructive)", background: "oklch(0.3 0.05 35 / 0.15)", color: "var(--destructive)" }}
+        >
+          ⚠ {intersection.reason}
         </div>
+      )}
+
+      {intersection?.ok && (
+        <div className="flex flex-col gap-3">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Readout
+              label="Εκτιμώμενο σημείο σκαψίματος (τομή)"
+              value={`${intersection.lat.toFixed(6)}, ${intersection.lon.toFixed(6)}`}
+              tone="phosphor"
+            />
+            <Readout label="Ζώνη αβεβαιότητας 95%" value={fmtArea(intersection.areaM2)} tone="brass" />
+            <Readout
+              label="Σύγκλιση γραμμών (RMS)"
+              value={intersection.rmsResidualM.toFixed(2)}
+              unit="m"
+              tone={intersection.rmsResidualM < 5 ? "phosphor" : "brass"}
+            />
+          </div>
+
+          <div className="h-64 overflow-hidden rounded-sm border border-panel-line">
+            <ReverseLocatorMap stations={stations} result={intersection} />
+          </div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[0.64rem] text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block h-0.5 w-4 bg-phosphor" /> μετρημένες γραμμές οροσήμων
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block size-2.5 rounded-full" style={{ background: "#ff5c5c" }} /> εκτιμώμενο σκάψιμο
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block size-2.5 rounded-sm" style={{ background: "#e6b85c", opacity: 0.6 }} /> ζώνη 95%
+            </span>
+          </div>
+        </div>
+      )}
+
+      {baselineCheck && (
+        <p className="rounded-sm border border-brass-dim/50 bg-secondary/30 px-3.5 py-3 font-mono text-[0.66rem] leading-relaxed text-muted-foreground">
+          Κανόνας ακρίβειας (§1-5d): καμία προβαλλόμενη γραμμή δεν πρέπει να ξεπερνά το{" "}
+          <span className="text-foreground">2× της βασικής γραμμής</span> μεταξύ των δύο οροσήμων (
+          {baselineCheck.baseM.toFixed(1)} m → όριο {(baselineCheck.baseM * 2).toFixed(1)} m).{" "}
+          {baselineCheck.exceeds ? (
+            <span className="text-destructive">Η μεγαλύτερη γραμμή ({baselineCheck.maxLine.toFixed(1)} m) υπερβαίνει το όριο.</span>
+          ) : (
+            <span className="text-phosphor">Εντός ορίου.</span>
+          )}
+        </p>
       )}
 
       <p className="rounded-sm border border-panel-line bg-readout px-3.5 py-3 font-mono text-[0.64rem] leading-relaxed text-muted-foreground">
         Το §7 εκτιμά τον στόχο στο <span className="text-foreground">{targetLat.toFixed(5)}, {targetLon.toFixed(5)}</span>.
-        Διασταύρωσε την αντίστροφη προβολή με αυτή τη θέση — αν συμπίπτουν, ο εντοπισμός ενισχύεται.
+        {targetOffset != null ? (
+          <>
+            {" "}Η τομή των γραμμών απέχει{" "}
+            <span className={targetOffset < 5 ? "text-phosphor" : "text-brass"}>{targetOffset.toFixed(1)} m</span> από
+            αυτόν — μικρή απόκλιση ενισχύει τον εντοπισμό.
+          </>
+        ) : (
+          <> Διασταύρωσε την τομή των γραμμών με αυτή τη θέση — αν συμπίπτουν, ο εντοπισμός ενισχύεται.</>
+        )}
       </p>
     </div>
   )
