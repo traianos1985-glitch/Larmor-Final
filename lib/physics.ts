@@ -180,12 +180,84 @@ export function findNearestHarmonic(
   return bestN !== null ? { n: bestN, f: f0 * bestN } : { n: n0, f: f0 * n0 }
 }
 
-/** Βέλτιστη αρμονική: max δ_soil × (1 − e^(−t/δ_metal)) */
+/* ============================================================
+   FRESNEL REFLECTION — Συντελεστής ανάκλασης στη διεπαφή
+   εδάφους → μετάλλου από τις εγγενείς κυματικές εμπεδήσεις.
+
+     η = √( jωμ / (σ + jωε) )              (intrinsic wave impedance, Balanis)
+     Γ = (η_metal − η_soil)/(η_metal + η_soil)   (Fresnel, κάθετη πρόσπτωση)
+     R = |Γ|²                               (ανακλώμενη ισχύς)
+
+   Είναι ΔΙΑΦΟΡΕΤΙΚΟ φαινόμενο από την «αδιαφάνεια» (1 − e^(−t/δ)):
+   ο Fresnel λέει ΠΟΣΟ ανακλάται στη διεπαφή, η αδιαφάνεια αν ΦΤΑΝΕΙ το
+   κύμα εκεί. Η πραγματική ανακλαστική απόκριση είναι το γινόμενό τους:
+     R_eff = |Γ|² · (1 − e^(−t/δ))
+
+   • Ευγενή μέταλλα (σ~10⁷): η_metal ~ mΩ ≪ η_soil ~ 100s Ω → |Γ|≈1. ✓
+   • Ίχνος Βορίου (σ=10⁻⁴): σχεδόν διηλεκτρικό, μικρή αναντιστοιχία → |Γ|≈0. ✓
+============================================================ */
+interface Complex {
+  re: number
+  im: number
+}
+function cAdd(a: Complex, b: Complex): Complex {
+  return { re: a.re + b.re, im: a.im + b.im }
+}
+function cSub(a: Complex, b: Complex): Complex {
+  return { re: a.re - b.re, im: a.im - b.im }
+}
+function cDiv(a: Complex, b: Complex): Complex {
+  const den = b.re * b.re + b.im * b.im || Number.MIN_VALUE
+  return { re: (a.re * b.re + a.im * b.im) / den, im: (a.im * b.re - a.re * b.im) / den }
+}
+function cSqrt(z: Complex): Complex {
+  const r = Math.hypot(z.re, z.im)
+  const theta = Math.atan2(z.im, z.re)
+  const sr = Math.sqrt(r)
+  return { re: sr * Math.cos(theta / 2), im: sr * Math.sin(theta / 2) }
+}
+function cAbs2(z: Complex): number {
+  return z.re * z.re + z.im * z.im
+}
+
+/** Εγγενής κυματική εμπέδηση η = √(jωμ/(σ+jωε)) ενός μέσου στη συχνότητα f. */
+export function intrinsicImpedance(sigma: number, epsilonR: number, muR: number, f: number): Complex {
+  const omega = 2 * Math.PI * f
+  const num: Complex = { re: 0, im: omega * MU0 * Math.max(muR, 0) } // jωμ
+  const den: Complex = { re: Math.max(sigma, 0), im: omega * EPSILON_0 * Math.max(epsilonR, 1e-6) } // σ + jωε
+  return cSqrt(cDiv(num, den))
+}
+
+/**
+ * Συντελεστής ανάκλασης ισχύος R = |Γ|² ∈ [0,1] στη διεπαφή εδάφους → μετάλλου
+ * (κάθετη πρόσπτωση) από τις εγγενείς εμπεδήσεις των δύο μέσων.
+ */
+export function fresnelReflection(
+  metalSigma: number,
+  metalMuR: number,
+  soilSigma: number,
+  soilEpsR: number,
+  f: number,
+  metalEpsR = 1,
+): number {
+  if (f <= 0) return 0
+  const etaM = intrinsicImpedance(metalSigma, metalEpsR, metalMuR, f)
+  const etaS = intrinsicImpedance(soilSigma, soilEpsR, 1, f)
+  const gamma = cDiv(cSub(etaM, etaS), cAdd(etaM, etaS))
+  return Math.max(0, Math.min(1, cAbs2(gamma)))
+}
+
+/**
+ * Βέλτιστη αρμονική: max δ_soil × R_eff, όπου
+ * R_eff = |Γ|²·(1 − e^(−t/δ_metal)) — συντελεστής Fresnel (πόσο ανακλάται
+ * στη διεπαφή) επί την αδιαφάνεια (αν φτάνει το κύμα εκεί).
+ */
 export function findOptimalCombo(
   f0: number,
   sigmaSoil: number,
   mat: Material,
   thicknessMm: number,
+  soilEpsR = 10,
 ): { n: number; f: number; score: number } | null {
   if (f0 <= 0) return null
   const t = thicknessMm / 1000
@@ -210,7 +282,10 @@ export function findOptimalCombo(
     const dMetal =
       mat.sigma > 0 && mat.muR > 0 ? Math.sqrt(2 / (omega * MU0 * mat.muR * mat.sigma)) : Number.POSITIVE_INFINITY
     const metalResp = isFinite(dMetal) && dMetal > 0 && t > 0 ? 1 - Math.exp(-t / dMetal) : 0
-    const score = dSoil * metalResp
+    // Fresnel: πόσο ανακλάται στη διεπαφή εδάφους→μετάλλου (ισχύς).
+    const reflR = fresnelReflection(mat.sigma, mat.muR, sigmaSoil, soilEpsR, f)
+    // Πλήρης ανακλαστική απόκριση = αδιαφάνεια × ανακλαστικότητα Fresnel.
+    const score = dSoil * metalResp * reflR
     if (score > bestScore) {
       bestScore = score
       bestN = n
@@ -333,7 +408,7 @@ export function computeGprPropagation(epsilon_r: number, sigma: number, f: numbe
    Η μετατόπιση σταθμίζεται με την απόκριση skin του μετάλλου
    metalResp = 1 − e^(−t/δ_metal) ∈ [0,1]:
      d_eff = max(0, d − metalResp · r)
-   Έτσι το x_exit = d_eff·tan(θ₁) μειώνεται ελαφρώς (ρηχότερη ανάκλαση),
+   Έτσι το x_exit = d_eff·tan(θ₁) μειώνεται ελα��ρώς (ρηχότερη ανάκλαση),
    που εξηγεί το μικρό αρνητικό drift της «πλήρους» περίπτωσης.
 */
 export function metalSkinResponse(radiusMm: number, deltaMetalM: number): number {
