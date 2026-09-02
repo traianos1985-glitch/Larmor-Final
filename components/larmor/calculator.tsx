@@ -1,448 +1,49 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
 import {
   MATERIALS,
   SOIL_TYPES,
   REFRACTION_SOILS,
   PRESETS,
-  getPreset,
-  BANDS,
-  getMaterial,
-  getUnitRef,
-  effectiveRadiusMm,
-  larmorHz,
-  skinDepth,
-  findNearestHarmonic,
-  findOptimalCombo,
-  fmtFrequency,
   fmtHzOnly,
   fmtLength,
   fmtDelta,
   fmtBandFrequency,
-  computeComplexN,
-  computeGprPropagation,
-  computeSnell,
-  metalSkinResponse,
-  fresnelReflection,
-  effectiveReflectionDepthM,
-  computeDriftDirection,
-  distanceAndBearingKm,
-  computeDipoleField,
-  computeDipoleInclination,
-  computeMeasurementQuality,
-  validateLat,
-  validateLon,
   validateBField,
   validateDepth,
   validateSigma,
   type DipoleAxis,
 } from "@/lib/physics"
-import { Crosshair } from "lucide-react"
-import { Panel, Field, Readout, inputClass, selectClass, buttonClass } from "./primitives"
+import { Panel, Field, Readout, inputClass, selectClass } from "./primitives"
 import { Spectrum } from "./spectrum"
 import { SkinDepthChart } from "./skin-depth-chart"
 import { Compass, RayDiagram } from "./drift-visuals"
-import { LocationPanel, type GeomagResult } from "./location-panel"
-import { HistoryPanel, type Measurement } from "./history-panel"
+import { LocationPanel } from "./location-panel"
+import { HistoryPanel } from "./history-panel"
 import { ExportButtons } from "./export-buttons"
-import { TriangulationPanel } from "./triangulation-panel"
+import { useLarmorSession } from "./session-context"
 
 export function Calculator() {
-  // Location / field
-  const [lat, setLat] = useState(37.9838)
-  const [lon, setLon] = useState(23.7275)
-  const [elev, setElev] = useState(0)
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
-  const [bfield, setBfield] = useState(47)
-  const [bSource, setBSource] = useState("χειροκίνητο")
-  const [geomag, setGeomag] = useState<GeomagResult>({ D: 4.2, I: 57, F: 47, H: 39, X: 38, Y: 3, Z: 37, uncertainty: null, secularVariation: { D: null, I: null, F: null }, source: "default (Ελλάδα ~2024)" })
+  const s = useLarmorSession()
+  const {
+    lat, lon, elev, date, bfield, geomag,
+    setLat, setLon, setElev, setDate, handleBResult, setGeomag,
+    generatorLat, generatorLon, observedLat, observedLon,
+    setGeneratorLat, setGeneratorLon, setObservedLat, setObservedLon,
+    materialId, setMaterialId, maxharm, setMaxharm, selectedN, setSelectedN,
+    unitMultiplier, setUnitMultiplier,
+    soilType, setSoilType, sigmaCustom, setSigmaCustom, targetDepth, setTargetDepth,
+    sec6Soil, setSec6Soil, sec6Theta, setSec6Theta, sec6H, setSec6H, dipoleAxis, setDipoleAxis,
+    setBfield, setBSource,
+    generatorFrequencyIsAuto, genRowLabel, selectedBand, bands, setGeneratorBandLabel, setGeneratorFrequency,
+    activePreset, setActivePreset, applyPreset,
+    mat, sigmaSoil, f0, rMm, f0fmt, harmonics,
+    fSelected, fSelFmt, deltaSoil, depthRatio, attenPct, deltaMetal, metalRatio,
+    ref, totalVol, totalMass, chartData, refraction, drift,
+    captureMeasurement, exportState,
+  } = s
 
-  // Material / harmonics
-  const [materialId, setMaterialId] = useState("au197")
-  const [maxharm, setMaxharm] = useState(8)
-  const [selectedN, setSelectedN] = useState(1)
-  const [unitMultiplier, setUnitMultiplier] = useState(1)
-
-  // Soil skin depth (section 3) — το «Εκτιμώμενο βάθος στόχου» είναι ΜΙΑ κοινή τιμή
-  // που τροφοδοτεί όλα τα sections που χρειάζονται βάθος (3 και 6).
-  const [soilType, setSoilType] = useState("0.01")
-  const [sigmaCustom, setSigmaCustom] = useState(0.001)
-  const [targetDepth, setTargetDepth] = useState(1)
-
-  // Refraction (section 6) — το βάθος d δεν είναι πλέον ξεχωριστό state·
-  // χρησιμοποιεί το κοινό targetDepth ώστε να μη δίνεται δύο φορές.
-  const [sec6Soil, setSec6Soil] = useState("10|0.01")
-  const [sec6Theta, setSec6Theta] = useState(15)
-  const [sec6H, setSec6H] = useState(1.0)
-  const [dipoleAxis, setDipoleAxis] = useState<DipoleAxis>("NS")
-
-  // Experimental field setup and observed endpoint
-  const [generatorLat, setGeneratorLat] = useState(37.9838)
-  const [generatorLon, setGeneratorLon] = useState(23.7275)
-  const [generatorFrequency, setGeneratorFrequency] = useState(0)
-  const [generatorBandLabel, setGeneratorBandLabel] = useState("")
-  const [rodLengthCm] = useState(15)
-  const [rodSpacingCm] = useState(10)
-  const [observedLat, setObservedLat] = useState(37.9845)
-  const [observedLon, setObservedLon] = useState(23.735)
-
-  // Preset & GPS UI feedback
-  const [activePreset, setActivePreset] = useState<string>("")
-  const [gpsStatus, setGpsStatus] = useState<string>("")
-
-  // ── Persistence: επαναφορά/αποθήκευση της τρέχουσας συνεδρίας σε localStorage ──
-  // Ώστε το σύνολο των ρυθμίσεων εργασίας (υλικό, πεδίο, συντεταγμένες, έδαφος,
-  // διάθλαση κ.λπ.) να επιβιώνει ανάμεσα σε sessions, όχι μόνο το ιστορικό.
-  const STATE_KEY = "larmor-session-v1"
-  const restoredRef = useRef(false)
-
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STATE_KEY)
-      if (raw) {
-        const s = JSON.parse(raw)
-        if (Number.isFinite(s.lat)) setLat(s.lat)
-        if (Number.isFinite(s.lon)) setLon(s.lon)
-        if (Number.isFinite(s.elev)) setElev(s.elev)
-        if (typeof s.date === "string") setDate(s.date)
-        if (Number.isFinite(s.bfield)) setBfield(s.bfield)
-        if (typeof s.bSource === "string") setBSource(s.bSource)
-        if (s.geomag && typeof s.geomag === "object") setGeomag(s.geomag)
-        if (typeof s.materialId === "string") setMaterialId(s.materialId)
-        if (Number.isFinite(s.maxharm)) setMaxharm(s.maxharm)
-        if (Number.isFinite(s.selectedN)) setSelectedN(s.selectedN)
-        if (Number.isFinite(s.unitMultiplier)) setUnitMultiplier(s.unitMultiplier)
-        if (typeof s.soilType === "string") setSoilType(s.soilType)
-        if (Number.isFinite(s.sigmaCustom)) setSigmaCustom(s.sigmaCustom)
-        if (Number.isFinite(s.targetDepth)) setTargetDepth(s.targetDepth)
-        else if (Number.isFinite(s.sec6Depth)) setTargetDepth(s.sec6Depth)
-        if (typeof s.sec6Soil === "string") setSec6Soil(s.sec6Soil)
-        if (Number.isFinite(s.sec6Theta)) setSec6Theta(s.sec6Theta)
-        if (Number.isFinite(s.sec6H)) setSec6H(s.sec6H)
-        if (s.dipoleAxis === "NS" || s.dipoleAxis === "EW") setDipoleAxis(s.dipoleAxis)
-        if (Number.isFinite(s.generatorLat)) setGeneratorLat(s.generatorLat)
-        if (Number.isFinite(s.generatorLon)) setGeneratorLon(s.generatorLon)
-        if (Number.isFinite(s.generatorFrequency)) setGeneratorFrequency(s.generatorFrequency)
-        if (typeof s.generatorBandLabel === "string") setGeneratorBandLabel(s.generatorBandLabel)
-        if (Number.isFinite(s.observedLat)) setObservedLat(s.observedLat)
-        if (Number.isFinite(s.observedLon)) setObservedLon(s.observedLon)
-        if (typeof s.activePreset === "string") setActivePreset(s.activePreset)
-      }
-    } catch (e) {
-      console.warn("[v0] Session restore failed:", e)
-    }
-    restoredRef.current = true
-  }, [])
-
-  useEffect(() => {
-    if (!restoredRef.current) return
-    try {
-      localStorage.setItem(
-        STATE_KEY,
-        JSON.stringify({
-          lat, lon, elev, date, bfield, bSource, geomag,
-          materialId, maxharm, selectedN, unitMultiplier,
-          soilType, sigmaCustom, targetDepth,
-          sec6Soil, sec6Theta, sec6H, dipoleAxis,
-          generatorLat, generatorLon, generatorFrequency, generatorBandLabel,
-          observedLat, observedLon, activePreset,
-        }),
-      )
-    } catch (e) {
-      console.warn("[v0] Session save failed:", e)
-    }
-  }, [
-    lat, lon, elev, date, bfield, bSource, geomag,
-    materialId, maxharm, selectedN, unitMultiplier,
-    soilType, sigmaCustom, targetDepth,
-    sec6Soil, sec6Theta, sec6H, dipoleAxis,
-    generatorLat, generatorLon, generatorFrequency, generatorBandLabel,
-    observedLat, observedLon, activePreset,
-  ])
-
-  // Εφαρμογή γρήγορης προεπιλογής υλικού + εδάφους (skin depth & διάθλαση).
-  function applyPreset(id: string) {
-    const p = getPreset(id)
-    if (!p) return
-    setMaterialId(p.materialId)
-    setSoilType(p.soilType)
-    setSec6Soil(p.sec6Soil)
-    setActivePreset(id)
-  }
-
-  // Ένα-πάτημα GPS για το παρατηρούμενο (τελικό) σημείο — γεμίζει lat/lon αυτόματα.
-  function useCurrentTargetLocation() {
-    if (typeof navigator === "undefined" || !navigator.geolocation) {
-      setGpsStatus("Το GPS δεν υποστηρίζεται σε αυτή τη συσκευή.")
-      return
-    }
-    setGpsStatus("Αναμονή άδειας τοποθεσίας…")
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const la = Number(pos.coords.latitude.toFixed(6))
-        const lo = Number(pos.coords.longitude.toFixed(6))
-        setObservedLat(la)
-        setObservedLon(lo)
-        const acc = pos.coords.accuracy
-        setGpsStatus(`Τελική θέση OK${Number.isFinite(acc) ? ` (±${Math.round(acc)} m)` : ""}.`)
-      },
-      (err) => setGpsStatus("Σφάλμα GPS: " + err.message),
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
-    )
-  }
-
-  const mat = getMaterial(materialId)
-  const sigmaSoil = soilType === "custom" ? sigmaCustom : Number.parseFloat(soilType)
-  const f0 = useMemo(() => larmorHz(mat.gamma, bfield), [mat.gamma, bfield])
-  const rMm = useMemo(() => effectiveRadiusMm(mat, unitMultiplier), [mat, unitMultiplier])
-
-  const f0fmt = fmtFrequency(f0)
-
-  // Harmonics rows
-  const harmonics = useMemo(() => {
-    const rows = []
-    for (let i = 1; i <= maxharm; i++) {
-      const f = f0 * i
-      rows.push({
-        n: i,
-        f,
-        dSoil: skinDepth(f, sigmaSoil),
-        dMetal: skinDepth(f, mat.sigma, mat.muR),
-      })
-    }
-    return rows
-  }, [f0, maxharm, sigmaSoil, mat])
-
-  // Bands
-  const bands = useMemo(() => {
-    if (f0 <= 0) return []
-    return BANDS.map((band) => {
-      const result =
-        band.criterion === "optimal"
-          ? findOptimalCombo(f0, sigmaSoil, mat, rMm)
-          : findNearestHarmonic(f0, band.target as number, band.criterion)
-      if (!result) return null
-      const f = result.f
-      return {
-        label: band.label,
-        criterion: band.criterion,
-        n: result.n,
-        f,
-        deltaF: band.target ? f - band.target : null,
-        dSoil: skinDepth(f, sigmaSoil),
-        dMetal: skinDepth(f, mat.sigma, mat.muR),
-      }
-    }).filter(Boolean) as {
-      label: string
-      criterion: any
-      n: number
-      f: number
-      deltaF: number | null
-      dSoil: number
-      dMetal: number
-    }[]
-  }, [f0, sigmaSoil, mat, rMm])
-
-  // ── Επιλεγμένη συχνότητα εκπομπής (από τις ομαδοποιημένες ζώνες, section 2β) ──
-  // Αυτή είναι η ΜΙΑ συχνότητα που τροφοδοτεί όλους τους παρακάτω υπολογισμούς:
-  // skin depth εδάφους (3), skin depth μετάλλου (4), διάθλαση/drift (6) και
-  // τελική χαρτογράφηση (7). Ο χρήστης επιλέγει ζώνη ή δίνει χειροκίνητη τιμή.
-  const selectedBand = useMemo(() => {
-    if (!bands.length) return null
-    return (
-      bands.find((b) => b.label === generatorBandLabel) ??
-      bands.find((b) => b.criterion === "optimal") ??
-      bands[0]
-    )
-  }, [bands, generatorBandLabel])
-  const autoGeneratorFrequency = selectedBand ? selectedBand.f : f0
-  const effectiveGeneratorFrequency = generatorFrequency > 0 ? generatorFrequency : autoGeneratorFrequency
-  const generatorFrequencyIsAuto = !(generatorFrequency > 0)
-  const genRowLabel = generatorFrequencyIsAuto ? (selectedBand?.label ?? "—") : "χειροκίνητο"
-
-  // Η κύρια συχνότητα όλων των υπολογισμών = η συχνότητα εκπομπής της γεννήτριας
-  const fSelected = effectiveGeneratorFrequency
-  const fSelFmt = fmtFrequency(fSelected)
-
-  // Section 3 — skin depth εδάφους στη συχνότητα εκπομπής
-  const deltaSoil = skinDepth(fSelected, sigmaSoil)
-  const depthRatio = isFinite(deltaSoil) && deltaSoil > 0 ? targetDepth / deltaSoil : 0
-  const attenPct = isFinite(deltaSoil) ? Math.max(0, Math.min(100, Math.exp(-depthRatio) * 100)) : 0
-
-  // Section 4 — skin depth υλικού-στόχου στη συχνότητα εκπομπής
-  const deltaMetal = skinDepth(fSelected, mat.sigma, mat.muR)
-  const tMetal = rMm / 1000
-  const metalRatio = isFinite(deltaMetal) && deltaMetal > 0 && tMetal > 0 ? tMetal / deltaMetal : 0
-  const ref = getUnitRef(mat)
-  const totalVol = unitMultiplier * ref.volume_cm3
-  const totalMass = unitMultiplier * ref.mass_g
-
-  // Chart data
-  const chartData = harmonics.map((h) => ({ n: h.n, soil: h.dSoil, metal: h.dMetal }))
-
-  // Section 6 refraction — η κύρια γραμμή υπολογίζεται στη συχνότητα εκπομπής (fSelected).
-  // Ο πίνακας δείχνει και τις υπόλοιπες ομαδοποιημένες ζώνες για σύγκριση.
-  const refraction = useMemo(() => {
-    const [epsStr, sigStr] = sec6Soil.split("|")
-    const epsilon_r = Number.parseFloat(epsStr)
-    const sigma = Number.parseFloat(sigStr)
-    const theta1_rad = (sec6Theta * Math.PI) / 180
-
-    const computeRow = (label: string, f: number) => {
-      if (!f || f <= 0) return null
-      const { n_r, loss_tangent, skin_depth_m } = computeComplexN(epsilon_r, sigma, f)
-      const { theta2_deg, is_TIR, theta_c_deg } = computeSnell(n_r, sec6Theta)
-      // Halo shell: ισχυρός ανακλαστήρας → ανάκλαση σε φλούδα μία ακτίνα πιο ρηχά.
-      const deltaMetalRow = skinDepth(f, mat.sigma, mat.muR)
-      const metalResp = metalSkinResponse(rMm, deltaMetalRow)
-      // Fresnel: ανακλαστικότητα ισχύος στη διεπαφή εδάφους→μετάλλου (νόμος Fresnel).
-      const fresnelR = fresnelReflection(mat.sigma, mat.muR, sigma, epsilon_r, f)
-      // Πλήρης ανακλαστική απόκριση = ανακλαστικότητα Fresnel × αδιαφάνεια skin.
-      const rEff = fresnelR * metalResp
-      const { depth: d_eff, shift: halo_shift } = effectiveReflectionDepthM(targetDepth, rMm, metalResp)
-      const x_exit = d_eff * Math.tan(theta1_rad)
-      const x_total = is_TIR ? x_exit : x_exit + sec6H * Math.tan(((theta2_deg as number) * Math.PI) / 180)
-      const v_soil = 3e8 / n_r
-      const lambda = v_soil / f
-      const r_fresnel = Math.sqrt(lambda * d_eff)
-      const propagation = computeGprPropagation(epsilon_r, sigma, f, Math.hypot(d_eff, x_total))
-      const atten_db = propagation.attenuationDb
-      return { label, n_r, loss_tangent, theta2_deg, is_TIR, theta_c_deg, x_exit, x_total, r_fresnel, atten_db, f, skin_depth_m, propagation, d_eff, halo_shift, metalResp, fresnelR, rEff }
-    }
-
-    const rows = bands.map((b) => computeRow(b.label, b.f)).filter(Boolean) as any[]
-    const mainRow = computeRow(genRowLabel, fSelected)
-    const selectedLabel = generatorFrequencyIsAuto ? (selectedBand?.label ?? null) : null
-    return { rows, mainRow, selectedLabel, epsilon_r, sigma }
-  }, [sec6Soil, sec6Theta, targetDepth, sec6H, bands, fSelected, genRowLabel, generatorFrequencyIsAuto, selectedBand, mat, rMm])
-
-  const drift = useMemo(
-    () => computeDriftDirection(dipoleAxis, geomag.D),
-    [dipoleAxis, geomag.D],
-  )
-
-  const endpoint = useMemo(() => distanceAndBearingKm(generatorLat, generatorLon, observedLat, observedLon), [generatorLat, generatorLon, observedLat, observedLon])
-
-  // ── Δείκτες ποιότητας μέτρησης (αντικαθιστούν το παλιό ευριστικό confidence) ──
-  // Σύνθετος, διαφανής δείκτης από φυσικά θεμελιωμένους παράγοντες: πηγή πεδίου B,
-  // εγκυρότητα μοντέλου διάθλασης (tan δ), γεωμετρία (ΟΕΑ), ισχύ σήματος στο βάθος,
-  // εγγύτητα σημείων και επιλογή βέλτιστης συχνότητας.
-  const quality = useMemo(
-    () =>
-      computeMeasurementQuality({
-        bSource,
-        lossTangent: refraction.mainRow?.loss_tangent ?? null,
-        isTIR: refraction.mainRow?.is_TIR ?? false,
-        distanceKm: endpoint.distanceKm,
-        // Επιστρεφόμενο σήμα = πλάτος στο βάθος (εξασθένηση εδάφους) × ανακλαστική
-        // απόκριση R_eff = |Γ|²·(1 − e^(−t/δ)) — διακρίνει φυσικά χρυσό από ίχνος Βορίου.
-        signalAmplitudePct: attenPct * (refraction.mainRow?.rEff ?? 1),
-        frequencyIsOptimal: generatorFrequencyIsAuto && selectedBand?.criterion === "optimal",
-      }),
-    [bSource, refraction.mainRow, endpoint.distanceKm, attenPct, generatorFrequencyIsAuto, selectedBand],
-  )
-
-  const estimatedTarget = useMemo(
-    () => ({
-      lat: observedLat,
-      lon: observedLon,
-      confidence: quality.score,
-    }),
-    [observedLat, observedLon, quality.score],
-  )
-
-  function handleBResult(uT: number, source: string) {
-    setBfield(Number(uT.toFixed(4)))
-    setBSource(source)
-  }
-
-  // Κεντρικός υπολογισμός γεωμαγνητικού πεδίου για ένα σημείο — ώστε κάθε αλλαγή
-  // συντεταγμένων (χάρτης, τρέχουσα θέση, χειροκίνητ�� πληκτρολόγη��η) να ενημερώνει το B.
-  function computeFieldAt(la: number, lo: number) {
-    if (!Number.isFinite(la) || !Number.isFinite(lo)) return
-    const uT = computeDipoleField(la, lo)
-    handleBResult(uT, "Offline dipole (~10-20% σφάλμα)")
-    setGeomag({ D: 4.2, I: computeDipoleInclination(la, lo), F: uT, H: uT * 0.83, X: uT * 0.82, Y: uT * 0.07, Z: uT * 0.56, uncertainty: null, secularVariation: { D: null, I: null, F: null }, source: "Offline dipole (D=default, I≈dipole)" })
-  }
-
-  // Η γεννήτρια και το σημείο μέτρησης ταυτίζονται: όποιο και να αλλάξει, συγχρονίζονται
-  // και τα δύο ζεύγη συν��εταγμένων, ο χάρτης κεντράρεται και το πεδίο B επανυπολογίζεται.
-  function applyGeneratorLat(v: number) {
-    setGeneratorLat(v)
-    setLat(v)
-    computeFieldAt(v, generatorLon)
-  }
-  function applyGeneratorLon(v: number) {
-    setGeneratorLon(v)
-    setLon(v)
-    computeFieldAt(generatorLat, v)
-  }
-
-  function captureMeasurement(): Measurement {
-    return {
-      id: "meas_" + Date.now(),
-      timestamp: new Date().toISOString(),
-      material_id: mat.id,
-      material_name: mat.name,
-      B_uT: bfield,
-      f0_hz: f0,
-      unit_mult: unitMultiplier,
-      equiv_radius_mm: rMm,
-      selected_n: selectedBand?.n ?? selectedN,
-      selected_freq_hz: fSelected,
-      soil_type: sec6Soil,
-      theta1_deg: sec6Theta,
-      h_m: sec6H,
-      depth_m: targetDepth,
-      drift_x_total_m: refraction.mainRow?.x_total ?? 0,
-      drift_axis: drift.axis_label,
-      drift_dir1: drift.dir1_label,
-      drift_dir2: drift.dir2_label,
-      dipole_axis: dipoleAxis,
-      lat,
-      lon,
-      generator_lat: generatorLat,
-      generator_lon: generatorLon,
-      generator_freq_hz: effectiveGeneratorFrequency,
-      generator_band: genRowLabel,
-      target_lat: observedLat,
-      target_lon: observedLon,
-      target_bearing_deg: endpoint.bearingDeg,
-      target_distance_km: endpoint.distanceKm,
-      target_confidence: estimatedTarget.confidence,
-      notes: "",
-    }
-  }
-
-  const exportState = {
-    mat,
-    f0,
-    bfield,
-    bSource,
-    lat,
-    lon,
-    elev,
-    date,
-    maxharm,
-    sigmaSoil,
-    selectedN,
-    fSelected,
-    deltaSoil,
-    deltaMetal,
-    targetDepth,
-    rMm,
-    generatorLat,
-    generatorLon,
-    generatorFrequency: effectiveGeneratorFrequency,
-    rodLengthCm,
-    rodSpacingCm,
-    observedLat,
-    observedLon,
-    estimateDistanceKm: endpoint.distanceKm,
-    estimateBearingDeg: endpoint.bearingDeg,
-    estimateConfidence: estimatedTarget.confidence,
-  }
+  const unitRef = ref
 
   return (
     <div className="flex flex-col gap-5">
@@ -452,7 +53,7 @@ export function Calculator() {
         elev={elev}
         date={date}
         bfield={bfield}
-        bSource={bSource}
+        bSource={s.bSource}
         geomag={geomag}
         setLat={setLat}
         setLon={setLon}
@@ -468,113 +69,6 @@ export function Calculator() {
         setGeneratorLon={setGeneratorLon}
         setObservedLat={setObservedLat}
         setObservedLon={setObservedLon}
-      />
-
-      <Panel step="7" className="order-last" title="Τελική χαρτογράφηση & πειραματική εκτίμηση θέσης" desc="Αφού επιλέξεις υλικό, πεδίο και συχνότητα, κατέγραψε τη γεννήτρια και το σημείο που δείχνουν οι βέργες. Η απόσταση και η διόπτευση είναι πειραματικές εκτιμήσεις.">
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Γεννήτρια · πλάτος" htmlFor="generator-lat" warn={validateLat(generatorLat)}><input id="generator-lat" type="number" step="0.000001" min={-90} max={90} className={inputClass} value={generatorLat} onChange={(e) => applyGeneratorLat(Number.parseFloat(e.target.value) || 0)} /></Field>
-            <Field label="Γεννήτρια · μήκος" htmlFor="generator-lon" warn={validateLon(generatorLon)}><input id="generator-lon" type="number" step="0.000001" min={-180} max={180} className={inputClass} value={generatorLon} onChange={(e) => applyGeneratorLon(Number.parseFloat(e.target.value) || 0)} /></Field>
-            <Field label="Συχνότητα πομπού · από ζώνη" htmlFor="generator-band">
-              <select
-                id="generator-band"
-                className={selectClass}
-                value={selectedBand?.label ?? ""}
-                onChange={(e) => setGeneratorBandLabel(e.target.value)}
-                disabled={!generatorFrequencyIsAuto}
-              >
-                {bands.map((b) => (
-                  <option key={b.label} value={b.label}>
-                    {b.label} · n={b.n} · {fmtBandFrequency(b.f, b.criterion)}
-                  </option>
-                ))}
-              </select>
-              <input
-                id="generator-frequency"
-                type="number"
-                min="0"
-                className={inputClass + " mt-2"}
-                value={generatorFrequency || ""}
-                onChange={(e) => setGeneratorFrequency(Number.parseFloat(e.target.value) || 0)}
-                placeholder={`από ζώνη = ${fmtHzOnly(autoGeneratorFrequency)}`}
-              />
-              <span className="mt-1 flex items-center justify-between gap-2 font-mono text-[0.6rem] text-muted-foreground">
-                <span className={generatorFrequencyIsAuto ? "text-phosphor" : "text-foreground"}>
-                  {generatorFrequencyIsAuto
-                    ? `ζώνη «${selectedBand?.label ?? "—"}» → ${fmtHzOnly(effectiveGeneratorFrequency)}`
-                    : `χειροκίνητο → ${fmtHzOnly(effectiveGeneratorFrequency)}`}
-                </span>
-                {!generatorFrequencyIsAuto && (
-                  <button type="button" onClick={() => setGeneratorFrequency(0)} className="rounded-sm border border-panel-line px-1.5 py-0.5 uppercase tracking-wide text-brass hover:bg-secondary/30">Χρήση ζώνης</button>
-                )}
-              </span>
-            </Field>
-            <div className="rounded-sm border border-panel-line bg-readout p-3 font-mono text-xs text-muted-foreground"><span className="block text-[10px] uppercase tracking-wider text-brass">Ηλεκτρόδια</span><span className="text-foreground">Μπρούτζος · 15 cm</span><br /><span className="text-foreground">Απόσταση: {rodSpacingCm} cm</span></div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="col-span-2">
-              <button type="button" className={buttonClass + " flex w-full items-center justify-center gap-2"} onClick={useCurrentTargetLocation}>
-                <Crosshair className="size-4" /> Χρήση τρέχουσας θέσης (τελικό σημείο)
-              </button>
-              {gpsStatus && <p className="mt-1.5 font-mono text-[0.68rem] text-muted-foreground">{gpsStatus}</p>}
-            </div>
-            <Field label="Τελική θέση · πλάτος" htmlFor="observed-lat" warn={validateLat(observedLat)}><input id="observed-lat" type="number" step="0.000001" min={-90} max={90} className={inputClass} value={observedLat} onChange={(e) => setObservedLat(Number.parseFloat(e.target.value) || 0)} /></Field>
-            <Field label="Τελική θέση · μήκος" htmlFor="observed-lon" warn={validateLon(observedLon)}><input id="observed-lon" type="number" step="0.000001" min={-180} max={180} className={inputClass} value={observedLon} onChange={(e) => setObservedLon(Number.parseFloat(e.target.value) || 0)} /></Field>
-            <Readout label="Απόσταση σημείων" value={endpoint.distanceKm.toFixed(3)} unit="km" tone="phosphor" />
-            <Readout label="Διόπτευση" value={endpoint.bearingDeg.toFixed(1)} unit="°" tone="brass" />
-          </div>
-        </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          <Readout label="Εκτιμώμενος στόχος" value={`${estimatedTarget.lat.toFixed(6)}, ${estimatedTarget.lon.toFixed(6)}`} tone="phosphor" />
-          <Readout label={`Ποιότητα μέτρησης · ${quality.grade}`} value={quality.score.toFixed(0)} unit="/100" tone={quality.gradeStatus === "good" ? "phosphor" : "brass"} />
-          <Readout label="Μήκος ηλεκτροδίων" value={rodLengthCm.toFixed(0)} unit="cm" />
-        </div>
-
-        {/* Ανάλυση δεικτών ποιότητας — διαφανής, αντί ενός αδιαφανούς ποσοστού */}
-        <div className="mt-4 rounded-sm border border-panel-line bg-readout p-3.5">
-          <p className="mb-3 flex items-center justify-between gap-2 font-mono text-[0.72rem]">
-            <span className="uppercase tracking-wide text-muted-foreground">Δείκτες ποιότητας μέτρησης</span>
-            <span
-              className={
-                "rounded-sm border px-2 py-0.5 " +
-                (quality.gradeStatus === "good"
-                  ? "border-phosphor-dim text-phosphor"
-                  : quality.gradeStatus === "warn"
-                    ? "border-brass-dim text-brass"
-                    : "border-destructive text-destructive")
-              }
-            >
-              {quality.grade} · {quality.score.toFixed(0)}/100
-            </span>
-          </p>
-          <div className="flex flex-col gap-2.5">
-            {quality.factors.map((f) => {
-              const barColor =
-                f.status === "good" ? "bg-phosphor" : f.status === "warn" ? "bg-brass" : "bg-destructive"
-              const textColor =
-                f.status === "good" ? "text-phosphor" : f.status === "warn" ? "text-brass" : "text-destructive"
-              return (
-                <div key={f.key} className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1">
-                  <span className="font-mono text-[0.72rem] text-foreground">{f.label}</span>
-                  <span className={"font-mono text-[0.72rem] " + textColor}>{Math.round(f.score * 100)}%</span>
-                  <div className="col-span-2 h-1.5 overflow-hidden rounded-full border border-panel-line bg-panel">
-                    <div className={"h-full transition-all " + barColor} style={{ width: `${f.score * 100}%` }} />
-                  </div>
-                  <span className="col-span-2 font-mono text-[0.66rem] leading-snug text-muted-foreground">{f.detail}</span>
-                </div>
-              )
-            })}
-          </div>
-          <p className="mt-3 border-t border-panel-line pt-2.5 font-mono text-[0.66rem] leading-relaxed text-muted-foreground">
-            Ο δείκτης είναι σταθμισμένος συνδυασμός σαφών παραγόντων ποιότητας (πηγή πεδίου, εγκυρότητα μοντέλου
-            διάθλασης, γεωμετρία διάδοσης, ισχύς σήματος, εγγύτητα σημείων, επιλογή συχνότητας) — όχι αυθαίρετο ποσοστό.
-          </p>
-        </div>
-      </Panel>
-
-      <TriangulationPanel
-        currentGenerator={{ lat: generatorLat, lon: generatorLon }}
-        currentBearing={endpoint.bearingDeg}
       />
 
       {/* Section 1 result — Larmor */}
@@ -646,7 +140,7 @@ export function Calculator() {
       <Panel
         step="2"
         title="Αρμονικές"
-        desc="Ακέ��αια πολλαπλάσια της θεμελιώδους συχνότητας. Κάνε κλικ σε γραμμή του φάσματος για επιλογή αρμονικής."
+        desc="Ακέραια πολλαπλάσια της θεμελιώδους συχνότητας. Κάνε κλικ σε γραμμή του φάσματος για επιλογή αρμονικής."
       >
         <Field label="Πλήθος εμφανιζόμενων αρμονικών (n)" htmlFor="maxharm">
           <input
@@ -755,7 +249,7 @@ export function Calculator() {
           </table>
         </div>
         <p className="mt-3 rounded-sm border border-brass-dim/50 bg-secondary/30 px-3 py-2.5 font-mono text-[0.7rem] leading-relaxed text-muted-foreground">
-          ★ Βέλτιστος: Μεγιστοποιεί το δ_soil × (1 − e^(−t/δ_metal)). Το βέλτιστο f βρίσκεται εκεί όπου δ_metal ≈ ισοδύναμη
+          ★ Βέλτιστος: Μεγιστοποιεί το δ_soil × (1 − e^(−t/δ)). Το βέλτιστο f βρίσκεται εκεί όπου δ_metal ≈ ισοδύναμη
           ακτίνα του στόχου. ⚠ Στα 1/3/6 GHz μόνο τα πρώτα ~5-6 δεκαδικά είναι αξιόπιστα (όριο IEEE-754).
         </p>
       </Panel>
@@ -764,14 +258,14 @@ export function Calculator() {
       <Panel
         step="3"
         title="Βάθος Διείσδυσης Σήματος (Skin Depth εδάφους)"
-        desc={<>Το ΕΜ σήμα εξασθενεί εκθετικά με το βάθος. Για καλό αγωγό χρησιμοποιούμε ρητά <span className="font-mono text-foreground">δ = √(2 / (ω μ σ))</span>, όπου ω = 2πf κα�� μ = μ₀μᵣ. Ισχύει κυρίως για καλούς αγωγούς και επίπεδα κύματα· για διηλεκτρικά/κοντινό πεδίο χρειάζεται πληρέστερο μοντέλο.</>}
+        desc={<>Το ΕΜ σήμα εξασθενεί εκθετικά με το βάθος. Για καλό αγωγό χρησιμοποιούμε ρητά <span className="font-mono text-foreground">δ = √(2 / (ω μ σ))</span>, όπου ω = 2πf και μ = μ₀μᵣ. Ισχύει κυρίως για καλούς αγωγούς και επίπεδα κύματα· για διηλεκτρικά/κοντινό πεδίο χρειάζεται πληρέστερο μοντέλο.</>}
       >
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Τύπος εδάφους" htmlFor="soiltype">
             <select id="soiltype" className={selectClass} value={soilType} onChange={(e) => { setSoilType(e.target.value); setActivePreset("") }}>
-              {SOIL_TYPES.map((s) => (
-                <option key={s.value} value={s.value}>
-                  {s.label}
+              {SOIL_TYPES.map((soil) => (
+                <option key={soil.value} value={soil.value}>
+                  {soil.label}
                 </option>
               ))}
               <option value="custom">Προσαρμοσμένη τιμή…</option>
@@ -817,7 +311,7 @@ export function Calculator() {
       <Panel
         step="4"
         title="Skin Depth Υλικού-Στόχου (μr)"
-        desc="Εκτίμηση διείσδυσης με το μοντέλο καλού αγωγού. ����ια μη μεταλλικά υλικά οι τιμές αγωγιμότητας είναι προσεγγιστικές και το αποτέλεσμα δεν αποτελεί πλήρες μοντέλο διηλεκτρικού συντονισμού."
+        desc="Εκτίμηση διείσδυσης με το μοντέλο καλού αγωγού. Για μη μεταλλικά υλικά οι τιμές αγωγιμότητας είναι προσεγγιστικές και το αποτέλεσμα δεν αποτελεί πλήρες μοντέλο διηλεκτρικού συντονισμού."
       >
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Πλήθος μονάδων συγκέντρωσης" htmlFor="unit-multiplier">
@@ -835,7 +329,7 @@ export function Calculator() {
             </select>
           </Field>
         </div>
-        <p className="mt-2 font-mono text-[0.7rem] text-muted-foreground">{ref.label}</p>
+        <p className="mt-2 font-mono text-[0.7rem] text-muted-foreground">{unitRef.label}</p>
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
           <Readout label="Συνολικός όγκος" value={totalVol.toLocaleString("el-GR", { maximumFractionDigits: 3 })} unit="cm³" tone="brass" />
           <Readout label="Συνολική μάζα" value={totalMass.toLocaleString("el-GR", { maximumFractionDigits: 1 })} unit="g" tone="brass" />
@@ -864,7 +358,7 @@ export function Calculator() {
       <Panel
         step="5"
         title="Γράφημα Skin Depth vs Αρμονική"
-        desc="Λογαριθμική κλίμακα. Χαμηλότερη αρμονική → μεγαλύτερο δ (βαθύτερη διείσδυση). Υψηλότερη → μικρότερο δ. Πέρασε τον δείκτη πάνω από τα σημεία."
+        desc="Λογαριθμική κλίμακα, ανά ομαδοποιημένη ζώνη συχνότητας (§2β). Χαμηλότερη ζώνη → μεγαλύτερο δ (βαθύτερη διείσδυση). Υψηλότερη → μικρότερο δ. Πέρασε τον δείκτη πάνω από τα σημεία."
       >
         <div className="mb-3 flex flex-wrap gap-4 font-mono text-[0.72rem]">
           <span className="flex items-center gap-1.5">
@@ -880,8 +374,8 @@ export function Calculator() {
       {/* Section 6 — Refraction */}
       <Panel
         step="6"
-        title="Μοντέλο Διάθ��ασης & Οριζόντια Απόκλιση (Drift)"
-        desc="Οριζόντια απόκλιση σήματος βάσει πλήρους μιγαδικού δείκτη διάθλασης, Νόμου Snell στη διεπαφή εδάφους/α��ρα και γεωμετρικής ανάλυσης ray-path (GPR standard)."
+        title="Μοντέλο Διάθλασης & Οριζόντια Απόκλιση (Drift)"
+        desc="Οριζόντια απόκλιση σήματος βάσει πλήρους μιγαδικού δείκτη διάθλασης, Νόμου Snell στη διεπαφή εδάφους/αέρα και γεωμετρικής ανάλυσης ray-path (GPR standard)."
       >
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <Field label="Εκτ. βάθος στόχου d (m)" htmlFor="sec6-depth" warn={validateDepth(targetDepth)}>
@@ -898,8 +392,8 @@ export function Calculator() {
           </Field>
           <Field label="Διηλεκτρική σταθερά εδάφους" htmlFor="sec6-epsilon">
             <select id="sec6-epsilon" className={selectClass} value={sec6Soil} onChange={(e) => { setSec6Soil(e.target.value); setActivePreset("") }}>
-              {REFRACTION_SOILS.map((s) => (
-                <option key={s.value} value={s.value}>{s.label}</option>
+              {REFRACTION_SOILS.map((soil) => (
+                <option key={soil.value} value={soil.value}>{soil.label}</option>
               ))}
             </select>
           </Field>

@@ -1,46 +1,17 @@
+import { AppHeader } from "@/components/larmor/app-header"
 import { Calculator } from "@/components/larmor/calculator"
 
 export default function Page() {
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-5 px-4 py-6 md:px-6 md:py-10">
-      <header className="flex flex-col gap-4 border-b border-panel-line pb-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
-            {/* Στυλιζαρισμένο σήμα "οργάνου": δίπολο B με precession */}
-            <span
-              aria-hidden="true"
-              className="tick-glow flex h-11 w-11 shrink-0 items-center justify-center rounded-sm border border-brass-dim bg-readout"
-            >
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" className="text-phosphor">
-                <path d="M12 2v20" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                <ellipse cx="12" cy="12" rx="9" ry="4" stroke="currentColor" strokeWidth="1.2" opacity="0.7" />
-                <circle cx="12" cy="12" r="2.4" fill="currentColor" />
-                <path d="M12 4l2.4 2.4M12 4l-2.4 2.4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-            </span>
-            <div>
-              <h1 className="font-display text-lg font-semibold leading-tight text-foreground text-balance md:text-2xl">
-                Larmor <span className="text-brass">&amp;</span> Αρμονικές
-              </h1>
-              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground md:text-xs">
-                Υπολογιστής Συχνοτήτων Μετάλλων
-              </p>
-            </div>
-          </div>
-          <div className="hidden shrink-0 flex-col items-end gap-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground sm:flex">
-            <span className="flex items-center gap-1.5">
-              <span className="tick-glow inline-block h-1.5 w-1.5 rounded-full bg-phosphor" />
-              rev. 2 · next.js
-            </span>
-            <span>WMM · geomag</span>
-          </div>
-        </div>
-        <p className="max-w-2xl text-pretty text-sm leading-relaxed text-muted-foreground">
-          Υπολογισμός συχνότητας Larmor{" "}
-          <span className="font-mono text-foreground">f = γ · B</span> για κοινά μέταλλα, με ζωντανό γεωμαγνητικό πεδίο,
-          αρμονικές, βάθος διείσδυσης και μοντέλο διάθλασης.
-        </p>
-      </header>
+      <AppHeader />
+
+      <p className="max-w-2xl text-pretty text-sm leading-relaxed text-muted-foreground">
+        Υπολογισμός συχνότητας Larmor{" "}
+        <span className="font-mono text-foreground">f = γ · B</span> για κοινά μέταλλα, με ζωντανό γεωμαγνητικό πεδίο,
+        αρμονικές, βάθος διείσδυσης και μοντέλο διάθλασης. Η τελική χαρτογράφηση και ο τριγωνισμός βρίσκονται στη σελίδα{" "}
+        <span className="text-brass">«Χαρτογράφηση»</span>.
+      </p>
 
       <Calculator />
 

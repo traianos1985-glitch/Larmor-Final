@@ -12,7 +12,9 @@ import {
 import { fmtDelta } from "@/lib/physics"
 
 export interface SkinDepthPoint {
+  label: string
   n: number
+  f: number
   soil: number
   metal: number
 }
@@ -21,7 +23,7 @@ function CustomTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null
   return (
     <div className="rounded-sm border border-panel-line bg-readout px-3 py-2 font-mono text-xs">
-      <p className="mb-1 text-muted-foreground">n = {label}</p>
+      <p className="mb-1 text-muted-foreground">Ζώνη: {label}</p>
       {payload.map((p: any) => (
         <p key={p.dataKey} style={{ color: p.color }}>
           {p.dataKey === "soil" ? "έδαφος" : "μέταλλο"}: {fmtDelta(p.value)}
@@ -46,9 +48,10 @@ export function SkinDepthChart({ data }: { data: SkinDepthPoint[] }) {
         <LineChart data={data} margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
           <CartesianGrid strokeDasharray="2 4" stroke="var(--panel-line)" vertical={false} />
           <XAxis
-            dataKey="n"
-            tick={{ fill: "var(--muted-foreground)", fontSize: 11, fontFamily: "var(--font-mono)" }}
-            tickFormatter={(v) => `n${v}`}
+            dataKey="label"
+            interval={0}
+            tick={{ fill: "var(--muted-foreground)", fontSize: 10, fontFamily: "var(--font-mono)" }}
+            tickFormatter={(v) => String(v).replace("★ ", "")}
             stroke="var(--panel-line)"
           />
           <YAxis

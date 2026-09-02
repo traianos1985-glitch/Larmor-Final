@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from "next"
 import { Inter, Space_Grotesk, JetBrains_Mono } from "next/font/google"
 import "leaflet/dist/leaflet.css"
 import "./globals.css"
+import { LarmorSessionProvider } from "@/components/larmor/session-context"
 
 const inter = Inter({ subsets: ["latin", "greek"], variable: "--font-inter" })
 const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], variable: "--font-space-grotesk" })
@@ -99,7 +100,7 @@ export default function RootLayout({
       className={`bg-background ${inter.variable} ${spaceGrotesk.variable} ${jetbrainsMono.variable}`}
     >
       <body className="font-sans antialiased">
-        {children}
+        <LarmorSessionProvider>{children}</LarmorSessionProvider>
         {process.env.NODE_ENV === "production" && <Analytics />}
       </body>
     </html>
