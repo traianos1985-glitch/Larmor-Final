@@ -24,6 +24,7 @@ import {
   computeGprPropagation,
   computeSnell,
   metalSkinResponse,
+  fresnelReflection,
   effectiveReflectionDepthM,
   computeDriftDirection,
   distanceAndBearingKm,
@@ -295,6 +296,10 @@ export function Calculator() {
       // Halo shell: ισχυρός ανακλαστήρας → ανάκλαση σε φλούδα μία ακτίνα πιο ρηχά.
       const deltaMetalRow = skinDepth(f, mat.sigma, mat.muR)
       const metalResp = metalSkinResponse(rMm, deltaMetalRow)
+      // Fresnel: ανακλαστικότητα ισχύος στη διεπαφή εδάφους→μετάλλου (νόμος Fresnel).
+      const fresnelR = fresnelReflection(mat.sigma, mat.muR, sigma, epsilon_r, f)
+      // Πλήρης ανακλαστική απόκριση = ανακλαστικότητα Fresnel × αδιαφάνεια skin.
+      const rEff = fresnelR * metalResp
       const { depth: d_eff, shift: halo_shift } = effectiveReflectionDepthM(targetDepth, rMm, metalResp)
       const x_exit = d_eff * Math.tan(theta1_rad)
       const x_total = is_TIR ? x_exit : x_exit + sec6H * Math.tan(((theta2_deg as number) * Math.PI) / 180)
@@ -303,7 +308,7 @@ export function Calculator() {
       const r_fresnel = Math.sqrt(lambda * d_eff)
       const propagation = computeGprPropagation(epsilon_r, sigma, f, Math.hypot(d_eff, x_total))
       const atten_db = propagation.attenuationDb
-      return { label, n_r, loss_tangent, theta2_deg, is_TIR, theta_c_deg, x_exit, x_total, r_fresnel, atten_db, f, skin_depth_m, propagation, d_eff, halo_shift, metalResp }
+      return { label, n_r, loss_tangent, theta2_deg, is_TIR, theta_c_deg, x_exit, x_total, r_fresnel, atten_db, f, skin_depth_m, propagation, d_eff, halo_shift, metalResp, fresnelR, rEff }
     }
 
     const rows = bands.map((b) => computeRow(b.label, b.f)).filter(Boolean) as any[]
@@ -330,7 +335,9 @@ export function Calculator() {
         lossTangent: refraction.mainRow?.loss_tangent ?? null,
         isTIR: refraction.mainRow?.is_TIR ?? false,
         distanceKm: endpoint.distanceKm,
-        signalAmplitudePct: attenPct,
+        // Επιστρεφόμενο σήμα = πλάτος στο βάθος (εξασθένηση εδάφους) × ανακλαστική
+        // απόκριση R_eff = |Γ|²·(1 − e^(−t/δ)) — διακρίνει φυσικά χρυσό από ίχνος Βορίου.
+        signalAmplitudePct: attenPct * (refraction.mainRow?.rEff ?? 1),
         frequencyIsOptimal: generatorFrequencyIsAuto && selectedBand?.criterion === "optimal",
       }),
     [bSource, refraction.mainRow, endpoint.distanceKm, attenPct, generatorFrequencyIsAuto, selectedBand],
@@ -977,6 +984,17 @@ export function Calculator() {
               <Readout label="Μετατόπιση φλούδας (halo)" value={(refraction.mainRow.halo_shift * 100).toFixed(1)} unit="cm" tone="brass" />
               <Readout label="Απόκριση skin μετάλλου" value={(refraction.mainRow.metalResp * 100).toFixed(1)} unit="%" />
             </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <Readout label="Ανάκλαση Fresnel |Γ|²" value={(refraction.mainRow.fresnelR * 100).toFixed(1)} unit="%" />
+              <Readout label="Ανακλαστική απόκριση R_eff" value={(refraction.mainRow.rEff * 100).toFixed(1)} unit="%" tone="brass" />
+              <Readout label="Αδιαφάνεια (1−e^−t/δ)" value={(refraction.mainRow.metalResp * 100).toFixed(1)} unit="%" />
+            </div>
+            <p className="mt-2 font-mono text-[0.7rem] leading-relaxed text-muted-foreground">
+              R_eff = |Γ|²·(1−e^(−t/δ)): ο νόμος Fresnel (πόσο ανακλάται στη διεπαφή) επί την αδιαφάνεια (αν φτάνει το κύμα εκεί).{" "}
+              {refraction.mainRow.fresnelR > 0.5
+                ? "Ισχυρή αναντιστοιχία εμπέδησης — καλός μεταλλικός ανακλαστήρας."
+                : "Μικρή αναντιστοιχία εμπέδησης — σχεδόν διηλεκτρική, ασθενής ανάκλαση."}
+            </p>
             <p className="mt-2 font-mono text-[0.7rem] leading-relaxed text-muted-foreground">
               {refraction.mainRow.metalResp > 0.5
                 ? `Ισχυρός ανακλαστήρας: η ανάκλαση γίνεται σε επιφανειακή φλούδα ~${(refraction.mainRow.halo_shift * 100).toFixed(1)} cm πιο ρηχά από το κέντρο, μειώνοντας ελαφρώς το drift κατά ~${((refraction.mainRow.x_exit - targetDepth * Math.tan((sec6Theta * Math.PI) / 180)) * 100).toFixed(1)} cm.`
