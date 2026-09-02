@@ -65,8 +65,7 @@ export function Calculator() {
   const [sigmaCustom, setSigmaCustom] = useState(0.001)
   const [targetDepth, setTargetDepth] = useState(1)
 
-  // Refraction (section 6)
-  const [sec6Depth, setSec6Depth] = useState(1.0)
+  // Refraction (section 6) — το βάθος στόχου κληρονομείται από το section 3 (targetDepth)
   const [sec6Soil, setSec6Soil] = useState("10|0.01")
   const [sec6Theta, setSec6Theta] = useState(15)
   const [sec6H, setSec6H] = useState(1.0)
@@ -111,7 +110,7 @@ export function Calculator() {
         if (typeof s.soilType === "string") setSoilType(s.soilType)
         if (typeof s.sigmaCustom === "number") setSigmaCustom(s.sigmaCustom)
         if (typeof s.targetDepth === "number") setTargetDepth(s.targetDepth)
-        if (typeof s.sec6Depth === "number") setSec6Depth(s.sec6Depth)
+        else if (typeof s.sec6Depth === "number") setTargetDepth(s.sec6Depth)
         if (typeof s.sec6Soil === "string") setSec6Soil(s.sec6Soil)
         if (typeof s.sec6Theta === "number") setSec6Theta(s.sec6Theta)
         if (typeof s.sec6H === "number") setSec6H(s.sec6H)
@@ -139,7 +138,7 @@ export function Calculator() {
           lat, lon, elev, date, bfield, bSource, geomag,
           materialId, maxharm, selectedN, unitMultiplier,
           soilType, sigmaCustom, targetDepth,
-          sec6Depth, sec6Soil, sec6Theta, sec6H, dipoleAxis,
+          sec6Soil, sec6Theta, sec6H, dipoleAxis,
           generatorLat, generatorLon, generatorFrequency, generatorBandLabel,
           observedLat, observedLon, presetId,
         }),
@@ -151,7 +150,7 @@ export function Calculator() {
     lat, lon, elev, date, bfield, bSource, geomag,
     materialId, maxharm, selectedN, unitMultiplier,
     soilType, sigmaCustom, targetDepth,
-    sec6Depth, sec6Soil, sec6Theta, sec6H, dipoleAxis,
+    sec6Soil, sec6Theta, sec6H, dipoleAxis,
     generatorLat, generatorLon, generatorFrequency, generatorBandLabel,
     observedLat, observedLon, presetId,
   ])
@@ -163,7 +162,6 @@ export function Calculator() {
     setMaterialId(p.materialId)
     setSoilType(p.soilType)
     setSec6Soil(p.refractionSoil)
-    setSec6Depth(p.depth)
     setTargetDepth(p.depth)
   }
 
@@ -355,7 +353,7 @@ export function Calculator() {
         const acc = Number.isFinite(pos.coords.accuracy) ? Math.round(pos.coords.accuracy) : null
         setObservedLat(la)
         setObservedLon(lo)
-        setGpsStatus(acc != null ? `Τελική θέση από GPS — ακρίβεια ±${acc} m.` : "Τελική θέση από GPS OK.")
+        setGpsStatus(acc != null ? `Τελική θέση από GPS — ακρί��εια ±${acc} m.` : "Τελική θέση από GPS OK.")
       },
       (err) => setGpsStatus("Σφάλμα GPS: " + err.message),
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
@@ -377,7 +375,7 @@ export function Calculator() {
       soil_type: sec6Soil,
       theta1_deg: sec6Theta,
       h_m: sec6H,
-      depth_m: sec6Depth,
+      depth_m: targetDepth,
       drift_x_total_m: refraction.mainRow?.x_total ?? 0,
       drift_axis: drift.axis_label,
       drift_dir1: drift.dir1_label,
@@ -511,7 +509,7 @@ export function Calculator() {
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <Readout label="Εκτιμώμενος στόχος" value={`${estimatedTarget.lat.toFixed(6)}, ${estimatedTarget.lon.toFixed(6)}`} tone="phosphor" />
           <Readout label="Δείκτης ποιότητας" value={quality.score.toFixed(0)} unit="/ 100" tone="brass" />
-          <Readout label="Βαθμίδα" value={quality.grade} tone={quality.grade === "Υψηλή" ? "phosphor" : quality.grade === "Μέτρια" ? "brass" : "muted"} />
+          <Readout label="Βαθμίδα" value={quality.grade} tone={quality.grade === "��ψηλή" ? "phosphor" : quality.grade === "Μέτρια" ? "brass" : "muted"} />
         </div>
 
         {/* Αναλυτικοί δείκτες ποιότητας μέτρησης — αντικαθιστούν το παλιό ευριστικό «confidence». */}
@@ -852,12 +850,17 @@ export function Calculator() {
         desc="Οριζόντια απόκλιση σήματος βάσει πλήρους μιγαδικού δείκτη διάθλασης, Νόμου Snell στη διεπαφή εδάφους/α��ρα και γεωμετρικής ανάλυσης ray-path (GPR standard)."
       >
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <Field label="Εκτ. βάθος στόχου d (m)" htmlFor="sec6-depth">
-            <select id="sec6-depth" className={selectClass} value={sec6Depth} onChange={(e) => setSec6Depth(Number.parseFloat(e.target.value))}>
-              {[0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0].map((d) => (
-                <option key={d} value={d}>{d.toFixed(1)} m</option>
-              ))}
-            </select>
+          <Field label="Εκτ. βάθος στόχου d (m)" htmlFor="sec6-depth" warn={validateDepth(targetDepth)}>
+            <input
+              id="sec6-depth"
+              type="number"
+              step="0.1"
+              min={0}
+              className={inputClass}
+              value={targetDepth}
+              onChange={(e) => setTargetDepth(Number.parseFloat(e.target.value) || 0)}
+            />
+            <p className="mt-1 font-mono text-[0.62rem] text-muted-foreground">Συγχρονίζεται με το βάθος του Βήματος 3</p>
           </Field>
           <Field label="Διηλεκτρική σταθερά εδάφους" htmlFor="sec6-epsilon">
             <select id="sec6-epsilon" className={selectClass} value={sec6Soil} onChange={(e) => setSec6Soil(e.target.value)}>

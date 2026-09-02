@@ -99,7 +99,13 @@ export function LocationPanel({
         // Μετακίνησε και τη γεννήτρια ώστε ο χάρτης να κεντραριστεί στην τρέχουσα θέση.
         setGeneratorLat(la)
         setGeneratorLon(lo)
-        if (pos.coords.altitude != null) setElev(Math.round(pos.coords.altitude))
+        // Το GPS υψόμετρο σπάνια είναι διαθέσιμο (null σε πολλά κινητά/laptop).
+        // Αν λείπει, φέρε το υψόμετρο εδάφους από API ανύψωσης (DEM).
+        if (Number.isFinite(pos.coords.altitude as number)) {
+          setElev(Math.round(pos.coords.altitude as number))
+        } else {
+          void fetchElevation(la, lo)
+        }
         // Υπολόγισε αμέσως το πεδίο B με το NOAA WMM για τη νέα θέση.
         void fetchLiveB(la, lo)
         setStatus(acc != null ? `Τοποθεσία OK — ακρίβεια ±${acc} m.` : "Τοποθεσία OK — ο χάρτης μεταφέρθηκε.")
@@ -113,6 +119,23 @@ export function LocationPanel({
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
     )
+  }
+
+  async function fetchElevation(latArg: number, lonArg: number) {
+    try {
+      const res = await fetch(
+        `https://api.open-meteo.com/v1/elevation?latitude=${latArg}&longitude=${lonArg}`,
+        { headers: { Accept: "application/json" } },
+      )
+      const data = await res.json()
+      const value = Array.isArray(data?.elevation) ? Number(data.elevation[0]) : Number(data?.elevation)
+      if (Number.isFinite(value)) {
+        setElev(Math.round(value))
+        setStatus((s) => (s.startsWith("Τοποθεσία OK") ? `${s} Υψόμετρο εδάφους ${Math.round(value)} m.` : s))
+      }
+    } catch {
+      // Σιωπηλή αποτυχία — το υψόμετρο απλώς παραμένει ως έχει.
+    }
   }
 
   async function fetchLiveB(latArg: number = lat, lonArg: number = lon) {
