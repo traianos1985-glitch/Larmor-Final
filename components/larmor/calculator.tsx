@@ -23,6 +23,7 @@ import {
   computeComplexN,
   computeGprPropagation,
   computeSnell,
+  targetTiltAngleDeg,
   metalSkinResponse,
   fresnelReflection,
   effectiveReflectionDepthM,
@@ -76,6 +77,10 @@ export function Calculator() {
   const [sec6Theta, setSec6Theta] = useState(15)
   const [sec6H, setSec6H] = useState(1.0)
   const [dipoleAxis, setDipoleAxis] = useState<DipoleAxis>("NS")
+
+  // Section 7 — γεωμετρική κλίση/ασυμμετρία στόχου. Οριζόντια απόσταση (cm)
+  // ανάμεσα στα σταυρώματα δύο στοιχείων (π.χ. Βόριο ↔ Μαγγάνιο-55) στην επιφάνεια.
+  const [deltaXField, setDeltaXField] = useState(25)
 
   // Experimental field setup and observed endpoint
   const [generatorLat, setGeneratorLat] = useState(37.9838)
@@ -321,6 +326,9 @@ export function Calculator() {
     () => computeDriftDirection(dipoleAxis, geomag.D),
     [dipoleAxis, geomag.D],
   )
+
+  // Section 7 — γεωμετρική κλίση στόχου: α = arctan(Δx / (100·d)).
+  const tiltAngle = useMemo(() => targetTiltAngleDeg(deltaXField, targetDepth), [deltaXField, targetDepth])
 
   const endpoint = useMemo(() => distanceAndBearingKm(generatorLat, generatorLon, observedLat, observedLon), [generatorLat, generatorLon, observedLat, observedLon])
 
@@ -1054,6 +1062,78 @@ export function Calculator() {
             </p>
           </>
         )}
+      </Panel>
+
+      {/* Section 7 — Target tilt / asymmetry */}
+      <Panel
+        step="7β"
+        title="Υπολογιστής Γεωμετρικής Ασυμμετρίας & Κλίσης Στόχου"
+        desc="Καθαρά γεωμετρικός υπολογισμός: αν στην επιφάνεια καταγράφεται οριζόντια απόσταση Δx ανάμεσα στα σταυρώματα δύο στοιχείων (π.χ. Βόριο ↔ Μαγγάνιο-55) και το βάθος είναι d, τότε η γωνία κλίσης του άξονα που τα συνδέει είναι α = arctan(Δx / (100·d))."
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Οριζόντια διαφορά σταυρωμάτων Δx (cm)" htmlFor="delta-x-field">
+            <input
+              id="delta-x-field"
+              type="number"
+              step="1"
+              min={0}
+              className={inputClass}
+              value={deltaXField}
+              onChange={(e) => setDeltaXField(Number.parseFloat(e.target.value) || 0)}
+            />
+          </Field>
+          <Field label="Εκτ. βάθος στόχου d (m)" htmlFor="sec7-depth" warn={validateDepth(targetDepth)}>
+            <input
+              id="sec7-depth"
+              type="number"
+              step="0.1"
+              min={0}
+              className={inputClass}
+              value={targetDepth}
+              onChange={(e) => setTargetDepth(Number.parseFloat(e.target.value) || 0)}
+            />
+            <span className="mt-1 block font-mono text-[0.6rem] text-phosphor">συγχρονισμένο με §3 & §6</span>
+          </Field>
+        </div>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-[auto_1fr] lg:items-center">
+          <div className="flex items-center justify-center rounded-sm border border-panel-line bg-readout p-3">
+            <svg width="200" height="150" viewBox="0 0 200 150" role="img" aria-label={`Σχηματική κλίση στόχου ${tiltAngle.toFixed(1)} μοιρών`}>
+              {/* Επιφάνεια εδάφους */}
+              <line x1="10" y1="40" x2="190" y2="40" stroke="var(--brass)" strokeWidth="1.5" />
+              <text x="12" y="34" fill="var(--brass)" fontSize="9" fontFamily="monospace">επιφάνεια</text>
+              {/* Δύο σταυρώματα στην επιφάνεια */}
+              <line x1="80" y1="34" x2="80" y2="46" stroke="var(--phosphor)" strokeWidth="1.5" />
+              <line x1="120" y1="34" x2="120" y2="46" stroke="var(--phosphor)" strokeWidth="1.5" />
+              <text x="90" y="30" fill="var(--phosphor)" fontSize="8" fontFamily="monospace">Δx</text>
+              {/* Άξονας βάθους */}
+              <line x1="100" y1="40" x2="100" y2="130" stroke="var(--panel-line)" strokeWidth="1" strokeDasharray="3 3" />
+              {/* Κεκλιμένη κρύπτη — περιστροφή κατά α γύρω από το κέντρο */}
+              <g transform={`rotate(${tiltAngle} 100 95)`}>
+                <rect x="72" y="83" width="56" height="24" rx="3" fill="oklch(0.55 0.12 155 / 0.25)" stroke="var(--phosphor)" strokeWidth="1.5" />
+                <line x1="72" y1="95" x2="128" y2="95" stroke="var(--phosphor-dim)" strokeWidth="1" />
+              </g>
+              <text x="100" y="145" fill="var(--muted-foreground)" fontSize="9" fontFamily="monospace" textAnchor="middle">
+                {`α = ${tiltAngle.toFixed(1)}°`}
+              </text>
+            </svg>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Readout label="Γωνία κλίσης α" value={tiltAngle.toFixed(2)} unit="°" tone="phosphor" />
+            <Readout label="Κρίσιμη γωνία ΟΕΑ (§6)" value={refraction.mainRow ? refraction.mainRow.theta_c_deg.toFixed(2) : "—"} unit="°" tone="brass" />
+            <Readout label="Υποτείνουσα (Δx↔βάθος)" value={Math.hypot(deltaXField / 100, targetDepth).toFixed(3)} unit="m" />
+            <Readout
+              label="Χαρακτηρισμός"
+              value={tiltAngle < 5 ? "σχεδόν οριζόντιος" : tiltAngle < 30 ? "ήπια κεκλιμένος" : "έντονα κεκλιμένος"}
+            />
+          </div>
+        </div>
+
+        <p className="mt-4 rounded-sm border border-brass-dim/50 bg-secondary/30 px-3.5 py-3 font-mono text-[0.7rem] leading-relaxed text-muted-foreground">
+          ⚠ Ο υπολογισμός είναι καθαρός γεωμετρικός μετασχηματισμός των τιμών Δx και d που εισάγεις — τριγωνομετρία, όχι
+          ανίχνευση. Το αποτέλεσμα ισχύει μόνο στον βαθμό που τα Δx και d προέρχονται από πραγματικές, επαληθεύσιμες
+          μετρήσεις στόχου (garbage in → garbage out). Δεν αποδεικνύει από μόνο του ότι υπάρχει ή πού βρίσκεται υπόγειος στόχος.
+        </p>
       </Panel>
 
       <HistoryPanel lat={lat} lon={lon} capture={captureMeasurement} />
