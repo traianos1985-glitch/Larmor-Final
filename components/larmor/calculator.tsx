@@ -48,6 +48,7 @@ import { HistoryPanel, type Measurement } from "./history-panel"
 import { ExportButtons } from "./export-buttons"
 import { TriangulationPanel } from "./triangulation-panel"
 import { SuspectSitesPanel } from "./suspect-sites-panel"
+import { CachingToolsPanel } from "./caching-tools"
 
 export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
   // Location / field
@@ -337,7 +338,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
         isTIR: refraction.mainRow?.is_TIR ?? false,
         distanceKm: endpoint.distanceKm,
         // Επιστρεφόμενο σήμα = πλάτος στο βάθος (εξασθένηση εδάφους) × ανακλαστική
-        // απόκριση R_eff = |Γ|²·(1 − e^(−t/δ)) — διακρίνει φυσικά χρυσό από ίχνος Βορίου.
+        // απόκριση R_eff = |Γ|²��(1 − e^(−t/δ)) — διακρίνει φυσικά χρυσό από ίχνος Βορίου.
         signalAmplitudePct: attenPct * (refraction.mainRow?.rEff ?? 1),
         frequencyIsOptimal: generatorFrequencyIsAuto && selectedBand?.criterion === "optimal",
       }),
@@ -584,11 +585,13 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
         targetLat={estimatedTarget.lat}
         targetLon={estimatedTarget.lon}
         targetDepth={targetDepth}
-        driftMeters={refraction.mainRow?.x_total ?? 0}
-        driftAxisLabel={drift.axis_label}
-      />
-        </>
-      )}
+  driftMeters={refraction.mainRow?.x_total ?? 0}
+  driftAxisLabel={drift.axis_label}
+  />
+
+      <CachingToolsPanel targetLat={estimatedTarget.lat} targetLon={estimatedTarget.lon} />
+  </>
+  )}
 
       {tab === "calc" && (
         <>

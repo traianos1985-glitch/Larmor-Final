@@ -5,7 +5,7 @@ import { Calculator } from "@/components/larmor/calculator"
 
 const TABS = [
   { id: "calc" as const, label: "Υπολογισμός", hint: "Larmor · αρμονικές · διάθλαση" },
-  { id: "mapping" as const, label: "Χαρτογράφηση & Τριγωνισμός", hint: "§7 · §8 · §9" },
+  { id: "mapping" as const, label: "Χαρτογράφηση & Τριγωνισμός", hint: "§7 · §8 · §9 · §10" },
 ]
 
 export default function Page() {
