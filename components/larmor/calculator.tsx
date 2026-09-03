@@ -15,6 +15,9 @@ import {
   skinDepth,
   findNearestHarmonic,
   findOptimalCombo,
+  mineralizationCornerHz,
+  mineralizationRejection,
+  recommendCleanBand,
   WAVEFORMS,
   harmonicAmplitude,
   isHarmonicPresent,
@@ -258,6 +261,31 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
       dMetal: number
     }[]
   }, [f0, sigmaSoil, mat, rMm, waveform])
+
+  // ── Φίλτρο απόρριψης ορυκτοποίησης (αναβάθμιση #3) ──────────────────────────
+  // Δεν παράγει νέες συχνότητες: παίρνει τις ίδιες ομαδοποιημένες ζώνες και τις
+  // επισημαίνει/επαναταξινομεί ανάλογα με το πόσο μακριά πέφτουν από τη ζώνη
+  // θορύβου (ορυκτοποίησης) του εδάφους. Το ε_r αντλείται από το έδαφος διάθλασης.
+  const soilEpsR = useMemo(() => {
+    const eps = Number.parseFloat(sec6Soil.split("|")[0])
+    return Number.isFinite(eps) && eps > 0 ? eps : 10
+  }, [sec6Soil])
+
+  const mineralization = useMemo(() => {
+    if (!bands.length) return null
+    const fc = mineralizationCornerHz(sigmaSoil, soilEpsR)
+    const byLabel: Record<string, ReturnType<typeof mineralizationRejection>> = {}
+    for (const b of bands) byLabel[b.label] = mineralizationRejection(b.f, sigmaSoil, soilEpsR)
+    // Σύσταση καθαρής ζώνης: ίδια κριτήρια (δ_soil × R_eff) × καθαρότητα ζώνης.
+    const rec = recommendCleanBand(
+      bands.map((b) => ({ label: b.label, f: b.f })),
+      sigmaSoil,
+      mat,
+      rMm,
+      soilEpsR,
+    )
+    return { fc, byLabel, recommendedLabel: rec?.label ?? null }
+  }, [bands, sigmaSoil, soilEpsR, mat, rMm])
 
   // ── Επιλεγμένη συχνότητα εκπομπής (από τις ομαδοποιημένες ζώνες, section 2β) ──
   // Αυτή είναι η ΜΙΑ συχνότητα που τροφοδοτεί όλους τους παρακάτω υπολογισμούς:
@@ -584,7 +612,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
           </div>
           <p className="mt-3 border-t border-panel-line pt-2.5 font-mono text-[0.66rem] leading-relaxed text-muted-foreground">
             Ο δείκτης είναι σταθμισμένος συνδυασμός σαφών παραγόντων ποιότητας (πηγή πεδίου, εγκυρότητα μοντέλου
-            διάθλασης, γεωμετρία διάδοσης, ισχύς σήματος, εγγύτητα σημείων, επιλογή συχνότητας) — όχι αυθαίρετο ποσοστό.
+            ��ιάθλασης, γεωμετρία διάδοσης, ισχύς σήματος, εγγύτητα σημείων, επιλογή συχνότητας) — όχι αυθαίρετο ποσοστό.
           </p>
         </div>
       </Panel>
@@ -783,6 +811,32 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
           </span>
           <span className="text-[0.68rem] text-muted-foreground">Κλικ σε ζώνη για επιλογή</span>
         </div>
+
+        {/* Αναβάθμιση #3 — Φίλτρο απόρριψης ορυκτοποίησης: σύσταση καθαρής ζώνης */}
+        {mineralization && mineralization.recommendedLabel && (
+          <div className="mb-3 rounded-sm border border-phosphor-dim/60 bg-secondary/20 px-3 py-2.5 font-mono text-[0.72rem]">
+            <p className="flex items-center gap-2 text-brass">
+              <span aria-hidden className="text-phosphor">◎</span>
+              <span className="uppercase tracking-wide">Φίλτρο απόρριψης ορυκτοποίησης</span>
+            </p>
+            <p className="mt-1.5 leading-relaxed text-muted-foreground">
+              Σε αυτό το έδαφος, η καθαρότερη επιλογή μέσα από τις ζώνες σου είναι η{" "}
+              <span className="text-phosphor">«{mineralization.recommendedLabel}»</span> — πέφτει πιο μακριά από
+              τη ζώνη θορύβου του εδάφους (f_c ≈ {fmtFrequency(mineralization.fc).val} {fmtFrequency(mineralization.fc).unit}).
+              Δεν παράγεται καμία νέα συχνότητα· απλώς προτείνεται η καταλληλότερη από τις κανονικές αρμονικές.
+            </p>
+            <button
+              type="button"
+              className="mt-2 rounded-sm border border-brass px-2 py-1 uppercase tracking-wide text-brass hover:bg-secondary/40"
+              onClick={() => {
+                setGeneratorBandLabel(mineralization.recommendedLabel as string)
+                setGeneratorFrequency(0)
+              }}
+            >
+              Χρήση πρότασης
+            </button>
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full font-mono text-[0.78rem]">
             <thead>
@@ -793,12 +847,21 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
                 <th className="border-b border-panel-line px-2 py-2">Δf</th>
                 <th className="border-b border-panel-line px-2 py-2">δ έδαφος</th>
                 <th className="border-b border-panel-line px-2 py-2">δ μέταλλο</th>
+                <th className="border-b border-panel-line px-2 py-2">Καθαρότητα ζώνης</th>
               </tr>
             </thead>
             <tbody>
               {bands.map((b) => {
                 const isOpt = b.criterion === "optimal"
                 const isSelected = generatorFrequencyIsAuto && selectedBand?.label === b.label
+                const isRecommended = mineralization?.recommendedLabel === b.label
+                const clean = mineralization?.byLabel[b.label]
+                const cleanColor =
+                  clean?.status === "good"
+                    ? "text-phosphor"
+                    : clean?.status === "warn"
+                      ? "text-brass"
+                      : "text-destructive"
                 return (
                   <tr
                     key={b.label}
@@ -815,6 +878,14 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
                     <td className={"px-2 py-2 " + (isOpt ? "text-brass" : "")}>
                       {isSelected ? "▸ " : ""}
                       {b.label}
+                      {isRecommended && (
+                        <span
+                          className="ml-1.5 rounded-sm border border-phosphor-dim px-1 text-[0.6rem] uppercase tracking-wide text-phosphor"
+                          title="Πιο μακριά από τη ζώνη θορύβου του εδάφους"
+                        >
+                          ◎ καθαρή
+                        </span>
+                      )}
                     </td>
                     <td className="px-2 py-2 text-muted-foreground">n={b.n.toLocaleString("el-GR")}</td>
                     <td className="break-all px-2 py-2 text-phosphor">{fmtBandFrequency(b.f, b.criterion)}</td>
@@ -825,6 +896,14 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
                     </td>
                     <td className="px-2 py-2">{fmtDelta(b.dSoil)}</td>
                     <td className="px-2 py-2">{fmtDelta(b.dMetal)}</td>
+                    <td className={"px-2 py-2 " + cleanColor}>
+                      {clean
+                        ? `${Math.round(clean.score * 100)}%` +
+                          (isFinite(clean.clearanceDecades)
+                            ? ` · ${clean.clearanceDecades >= 0 ? "+" : ""}${clean.clearanceDecades.toFixed(1)} δεκ.`
+                            : "")
+                        : "—"}
+                    </td>
                   </tr>
                 )
               })}
@@ -834,6 +913,11 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
         <p className="mt-3 rounded-sm border border-brass-dim/50 bg-secondary/30 px-3 py-2.5 font-mono text-[0.7rem] leading-relaxed text-muted-foreground">
           ★ Βέλτιστος: Μεγιστοποιεί το δ_soil × (1 − e^(−t/δ_metal)). Το βέλτιστο f βρίσκεται εκεί όπου δ_metal ≈ ισοδύναμη
           ακτίνα του στόχου. ⚠ Στα 1/3/6 GHz μόνο τα πρώτα ~5-6 δεκαδικά είναι αξιόπιστα (όριο IEEE-754).
+          <br />
+          ◎ Καθαρότητα ζώνης: απόσταση της αρμονικής (σε δεκάδες, log₁₀ f/f_c) από τη ζώνη θορύβου του εδάφους, όπου
+          f_c = σ/(2π ε₀ ε_r) είναι η συχνότητα μετάβασης αγωγού→διηλεκτρικού. Όσο πιο πάνω από την f_c, τόσο καθαρότερη
+          γραμμή. Η σύσταση «καθαρή» διαλέγεται από τις ίδιες ομαδοποιημένες αρμονικές — ίδια κριτήρια (δ_soil × R_eff)
+          με έναν επιπλέον παράγοντα καθαρότητας — χωρίς καμία νέα συχνότητα.
         </p>
       </Panel>
 
