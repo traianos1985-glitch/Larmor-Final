@@ -343,7 +343,7 @@ export function findOptimalCombo(
 /* ============================================================
    ΦΙΛΤΡΟ ΑΠΟΡΡΙΨΗΣ ΟΡΥΚΤΟΠΟΙΗΣΗΣ (Mineralization Rejection)
    ------------------------------------------------------------
-   ΔΕΝ παράγει νέες συχνότητες ούτε νέους κανόνες. Προσθέτει ΜΟΝΟ ένα
+   ΔΕΝ παράγει νέες συχνότητες ούτε νέους κανόνες. Προσ��έτει ΜΟΝΟ ένα
    ακόμη κριτήριο ταξινόμησης πάνω στις ήδη υπάρχουσες ομαδοποιημένες
    αρμονικές: πόσο μακριά πέφτει κάθε αρμονική από τη «ζώνη θορύβου»
    του μαγνητικού/ορυκτοποιημένου εδάφους.
@@ -615,6 +615,122 @@ export const REFRACTION_SOILS = [
   { value: "10|0.01", label: "Μέσο / Μικτό — ε_r=10, σ=0.01 S/m", eps: 10, sigma: 0.01 },
   { value: "25|0.05", label: "Υγρό / Αργιλώδες — ε_r=25, σ=0.05 S/m", eps: 25, sigma: 0.05 },
 ]
+
+/* ============================================================
+   ΑΥΤΟΜΑΤΟΣ ΤΥΠΟΣ ΕΔΑΦΟΥΣ ΑΠΟ ΥΓΡΑΣΙΑ (Open-Meteo soil moisture)
+   ------------------------------------------------------------
+   Η ογκομετρική υγρασία εδάφους θ (VWC, m³/m³) καθορίζει τόσο τη
+   σχετική διηλεκτρική σταθερά ε_r όσο και την αγωγιμότητα σ του εδάφους:
+
+   • ε_r από την εμπειρική εξίσωση Topp (1980), ευρέως αποδεκτή για
+     μετρήσεις TDR/GPR:
+         ε_r = 3.03 + 9.3·θ + 146·θ² − 76.7·θ³
+   • σ αυξάνει μονότονα με την υγρασία (νερό + διαλυμένα άλατα άγουν το
+     ρεύμα). Χρησιμοποιείται προσεγγιστικό μοντέλο τύπου νόμου δύναμης
+     αγκυρωμένο στους διακριτούς τύπους εδάφους της εφαρμογής.
+
+   Οι τιμές «κουμπώνουν» στους υπάρχοντες τύπους (SOIL_TYPES /
+   REFRACTION_SOILS) ώστε να τροφοδοτούν απευθείας τα ίδια selects.
+============================================================ */
+export function soilMoisturePermittivity(vwc: number): number {
+  const t = Math.max(0, Math.min(0.6, vwc))
+  const eps = 3.03 + 9.3 * t + 146 * t * t - 76.7 * t * t * t
+  return Math.max(1, eps)
+}
+
+/** Προσεγγιστική αγωγιμότητα εδάφους (S/m) από την ογκομετρική υγρασία θ. */
+export function soilMoistureConductivity(vwc: number): number {
+  const t = Math.max(0, Math.min(0.6, vwc))
+  // Μονότονο μοντέλο νόμου-δύναμης: θ≈0.02→~1e-4, 0.08→~1e-3, 0.18→~1e-2,
+  // 0.30→~5e-2, ≥0.45→~1e-1 S/m (συνεπές με τους τύπους εδάφους της εφαρμογής).
+  const sigma = 0.9 * Math.pow(t, 2.6)
+  return Math.max(1e-4, Math.min(0.15, sigma))
+}
+
+export interface SoilClassification {
+  /** Ογκομετρική υγρασία θ (m³/m³) */
+  vwc: number
+  /** Εκτιμώμενη αγωγιμότητα σ (S/m) */
+  sigma: number
+  /** Εκτιμώμενη σχετική διηλεκτρική σταθερά ε_r (Topp) */
+  epsR: number
+  /** Τιμή για το select του section 3 (SOIL_TYPES) */
+  soilTypeValue: string
+  /** Τιμή για το select του section 6 (REFRACTION_SOILS, «ε_r|σ») */
+  sec6SoilValue: string
+  /** Σύντομη περιγραφή κατηγορίας εδάφους */
+  label: string
+}
+
+/** Ταξινομεί την υγρασία εδάφους σε τύπο εδάφους της εφαρμογής (κουμπώνει στα υπάρχοντα selects). */
+export function classifySoilFromMoisture(vwc: number): SoilClassification {
+  const t = Math.max(0, Math.min(0.6, vwc))
+  const sigma = soilMoistureConductivity(t)
+  const epsR = soilMoisturePermittivity(t)
+
+  let soilTypeValue: string
+  let label: string
+  if (t < 0.05) {
+    soilTypeValue = "0.0001"
+    label = "Βραχώδες / πολύ ξηρό"
+  } else if (t < 0.12) {
+    soilTypeValue = "0.001"
+    label = "Ξηρό / αμμώδες"
+  } else if (t < 0.22) {
+    soilTypeValue = "0.01"
+    label = "Μέτριο / υγρό"
+  } else if (t < 0.35) {
+    soilTypeValue = "0.05"
+    label = "Αργιλώδες / υγρό"
+  } else {
+    soilTypeValue = "0.1"
+    label = "Κορεσμένο / βαλτώδες"
+  }
+
+  // Έδαφος διάθλασης (μόνο 3 επιλογές ε_r|σ).
+  const sec6SoilValue = t < 0.12 ? "4|0.001" : t < 0.28 ? "10|0.01" : "25|0.05"
+
+  return { vwc: t, sigma, epsR, soilTypeValue, sec6SoilValue, label }
+}
+
+/* ============================================================
+   ΜΑΓΝΗΤΙΚΗ ΟΡΥΚΤΟΠΟΙΗΣΗ ΠΕΡΙΟΧΗΣ (NOAA EMAG2 v3)
+   ------------------------------------------------------------
+   Το EMAG2 δίνει τη μαγνητική ανωμαλία του φλοιού (nT) — δηλαδή την
+   απόκλιση από το ομαλό πεδίο αναφοράς λόγω μαγνητικών ορυκτών
+   (κυρίως μαγνητίτη). Μεγάλο |ΔB| ⇒ έντονη μαγνητική ορυκτοποίηση,
+   που σημαίνει «θορυβώδες» έδαφος για ανίχνευση μετάλλων.
+============================================================ */
+export interface MagneticMineralization {
+  /** Μαγνητική ανωμαλία φλοιού ΔB (nT) */
+  anomalyNt: number
+  level: "low" | "moderate" | "high" | "extreme"
+  label: string
+  /** Δείκτης «θορύβου» ορυκτοποίησης ∈ [0,1] */
+  noiseIndex: number
+}
+
+export function classifyMagneticMineralization(anomalyNt: number): MagneticMineralization {
+  const a = Math.abs(anomalyNt)
+  let level: MagneticMineralization["level"]
+  let label: string
+  if (a < 50) {
+    level = "low"
+    label = "Χαμηλή ορυκτοποίηση — καθαρό έδαφος"
+  } else if (a < 150) {
+    level = "moderate"
+    label = "Μέτρια ορυκτοποίηση"
+  } else if (a < 350) {
+    level = "high"
+    label = "Υψηλή ορυκτοποίηση — θορυβώδες έδαφος"
+  } else {
+    level = "extreme"
+    label = "Πολύ υψηλή ορυκτοποίηση — έντονος θόρυβος"
+  }
+  // Κορεσμός σε ~500 nT για τον δείκτη θορύβου.
+  const noiseIndex = Math.max(0, Math.min(1, a / 500))
+  return { anomalyNt, level, label, noiseIndex }
+}
 
 /* ============================================================
    ΓΡΗΓΟΡΕΣ ΠΡΟΕΠΙΛΟΓΕΣ (Presets)

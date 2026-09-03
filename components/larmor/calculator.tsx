@@ -173,6 +173,15 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
     observedLat, observedLon, activePreset,
   ])
 
+  // Εφαρμογή αυτόματου τύπου εδάφους από την ανάλυση περιοχής (υγρασία → σ, ε_r).
+  // Ενημερώνει και το section 3 (skin depth) και το section 6 (διάθλαση), ώστε ο
+  // αυτόματος τύπος εδάφους να διαπερνά όλους τους σχετικούς υπολογισμούς.
+  function applyAutoSoil(soilTypeValue: string, sec6SoilValue: string) {
+    setSoilType(soilTypeValue)
+    setSec6Soil(sec6SoilValue)
+    setActivePreset("")
+  }
+
   // Εφαρμογή γρήγορης προεπιλογής υλικού + εδάφους (skin depth & διάθλαση).
   function applyPreset(id: string) {
     const p = getPreset(id)
@@ -231,7 +240,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
   }, [f0, maxharm, sigmaSoil, mat, waveform])
 
   // Bands — οι αρμονικές που μπορεί να εκπέμψει η γεννήτρια περιορίζονται από
-  // την κυματομορφή (π.χ. τετράγωνο → μόνο περιττά n· ημίτονο → μόνο n=1).
+  // την κυματομορφή (π.χ. τετράγωνο �� μόνο περιττά n· ημίτονο → μόνο n=1).
   const bands = useMemo(() => {
     if (f0 <= 0) return []
     const allowed = (n: number) => isHarmonicPresent(waveform, n)
@@ -511,6 +520,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
         setGeneratorLon={setGeneratorLon}
         setObservedLat={setObservedLat}
         setObservedLon={setObservedLon}
+        onApplySoil={applyAutoSoil}
       />
 
       {tab === "mapping" && (
