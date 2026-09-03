@@ -530,6 +530,126 @@ export const REFRACTION_SOILS = [
 ]
 
 /* ============================================================
+   ΦΙΛΤΡΟ ΑΠΟΡΡΙΨΗΣ ΨΕΥΔΟ-ΣΥΝΤΟΝΙΣΜΟΥ (Mineralization Rejection)
+   ------------------------------------------------------------
+   Η μαγνητική επιδεκτικότητα του εδάφους (κ, SI) — από οξείδια
+   σιδήρου (μαγνητίτης/μαγκεμίτης, «hot rocks», λατερίτης) — ανεβάζει
+   το τοπικό πεδίο κατά (1+κ) και δημιουργεί μια «ψευδο-γραμμή» Larmor
+   δίπλα στη γραμμή του στόχου. Η συχνοτο-εξαρτημένη (ιξώδης)
+   συνιστώσα χ_fd είναι ο μη-αναιρέσιμος θόρυβος («hot ground»).
+
+   Το φίλτρο μοντελοποιεί ένα ground-balance/notch:
+   - in-phase απόκριση κ·(1−χ_fd) → αναιρέσιμη (ρυθμιζόμενη)
+   - viscous απόκριση κ·χ_fd      → παραμένει
+============================================================ */
+export interface SoilMineral {
+  id: string
+  label: string
+  /** ογκομετρική μαγνητική επιδεκτικότητα κ (SI, αδιάστατη) */
+  chiSI: number
+  /** συχνοτο-εξαρτημένη επιδεκτικότητα χ_fd (%) */
+  chiFdPct: number
+}
+
+export const SOIL_MINERALS: SoilMineral[] = [
+  { id: "quartz", label: "Χαλαζιακή άμμος — ασθενώς μαγνητικό (κ≈30 µSI)", chiSI: 3e-5, chiFdPct: 2 },
+  { id: "loam", label: "Πηλώδες / μέτριο (κ≈300 µSI)", chiSI: 3e-4, chiFdPct: 5 },
+  { id: "clay", label: "Αργιλώδες / εμπλουτισμένο (κ≈2.000 µSI)", chiSI: 2e-3, chiFdPct: 8 },
+  { id: "laterite", label: "Λατερίτης / τροπικό (κ≈10.000 µSI)", chiSI: 1e-2, chiFdPct: 6 },
+  { id: "volcanic", label: "Ηφαιστειακό / μαγνητίτης — «hot rocks» (κ≈50.000 µSI)", chiSI: 5e-2, chiFdPct: 3 },
+]
+
+export interface MineralizationInput {
+  /** συχνότητα εκπομπής/στόχου (Hz) γύρω από την οποία εμφανίζεται η ψευδο-γραμμή */
+  targetHz: number
+  /** ογκομετρική επιδεκτικότητα εδάφους κ (SI) */
+  chiSI: number
+  /** συχνοτο-εξαρτημένη επιδεκτικότητα (%) */
+  chiFdPct: number
+  /** ισχύς φίλτρου / ground balance 0..1 */
+  filterStrength: number
+}
+
+export interface MineralizationResult {
+  falseResonanceHz: number
+  deltaFHz: number
+  linewidthHz: number
+  notchCenterHz: number
+  notchBandwidthHz: number
+  rejectionDb: number
+  /** 0..1 — κλάσμα του αρχικού σήματος ορυκτοποίησης που παραμένει */
+  residualFraction: number
+  /** 0..100 — δείκτης παρεμβολής πριν το φίλτρο */
+  interferenceBefore: number
+  /** 0..100 — δείκτης παρεμβολής μετά το φίλτρο */
+  interferenceAfter: number
+  /** αν η ψευδο-γραμμή ξεχωρίζει από τη γραμμή-στόχο */
+  resolvable: boolean
+  status: QualityStatus
+  recommendation: string
+}
+
+export function computeMineralizationRejection(input: MineralizationInput): MineralizationResult {
+  const f = Number.isFinite(input.targetHz) && input.targetHz > 0 ? input.targetHz : 0
+  const chi = Math.max(0, Number.isFinite(input.chiSI) ? input.chiSI : 0)
+  const fd = Math.max(0, Math.min(0.5, (Number.isFinite(input.chiFdPct) ? input.chiFdPct : 0) / 100))
+  const fs = Math.max(0, Math.min(1, Number.isFinite(input.filterStrength) ? input.filterStrength : 0))
+
+  // Ψευδο-γραμμή Larmor: η επιδεκτικότητα ανεβάζει το τοπικό B κατά (1+κ).
+  const falseResonanceHz = f * (1 + chi)
+  const deltaFHz = f * chi
+  // Διεύρυνση γραμμής από μαγνητικό ιξώδες (viscous ∝ κ·χ_fd) + μικρό δάπεδο.
+  const linewidthHz = f * chi * fd + f * 1e-6
+  const notchCenterHz = falseResonanceHz
+  const notchBandwidthHz = 2 * deltaFHz + linewidthHz
+
+  // Υπόλοιπο μετά ground balance/notch:
+  // in-phase (αναιρέσιμο) = κ·(1−fd) ρυθμίζεται κατά fs· viscous = κ·fd παραμένει.
+  const residualFraction = (1 - fs) * (1 - fd) + fd
+  const rejectionDb = residualFraction > 0 ? 10 * Math.log10(1 / residualFraction) : 0
+
+  // Δείκτης παρεμβολής (λογαριθμική κλίμακα κ: 10⁻⁵→0, 10⁻¹→100).
+  const interferenceBefore = chi > 0 ? Math.max(0, Math.min(100, ((Math.log10(chi) + 5) / 4) * 100)) : 0
+  const interferenceAfter = interferenceBefore * residualFraction
+
+  // Διαχωρισιμότητα: η ψευδο-γραμμή πρέπει να ξεχωρίζει από τη γραμμή-στόχο.
+  const resolvable = deltaFHz > linewidthHz
+
+  let status: QualityStatus = "good"
+  if (interferenceAfter >= 40) status = "bad"
+  else if (interferenceAfter >= 15) status = "warn"
+
+  let recommendation: string
+  if (interferenceBefore < 15) {
+    recommendation = "Ασθενής ορυκτοποίηση — το έδαφος επηρεάζει ελάχιστα· το φίλτρο είναι προαιρετικό."
+  } else if (!resolvable) {
+    recommendation =
+      "Η ψευδο-γραμμή σχεδόν συμπίπτει με τη γραμμή-στόχο (Δf ≤ εύρος). Χαμήλωσε την ισχύ του φίλτρου ώστε να μην αποκόπτεται και ο στόχος, ή άλλαξε συχνότητα εκπομπής."
+  } else if (status === "bad") {
+    recommendation =
+      "Έντονη ορυκτοποίηση («hot ground»). Το notch μειώνει σημαντικά τον θόρυβο, αλλά η ιξώδης συνιστώσα (χ_fd) παραμένει — προτίμησε χαμηλότερη συχνότητα ή αργότερη δειγματοληψία."
+  } else {
+    recommendation =
+      "Το φίλτρο απορρίπτει αποτελεσματικά την in-phase απόκριση του εδάφους· το εναπομένον σήμα προέρχεται κυρίως από τον στόχο."
+  }
+
+  return {
+    falseResonanceHz,
+    deltaFHz,
+    linewidthHz,
+    notchCenterHz,
+    notchBandwidthHz,
+    rejectionDb,
+    residualFraction,
+    interferenceBefore,
+    interferenceAfter,
+    resolvable,
+    status,
+    recommendation,
+  }
+}
+
+/* ============================================================
    ΓΡΗΓΟΡΕΣ ΠΡΟΕΠΙΛΟΓΕΣ (Presets)
    Συνδυασμοί υλικού-στόχου + εδάφους (skin depth) + εδάφους
    διάθλασης, για γρήγορη ρύθμιση τυπικών σεναρίων πεδίου.
@@ -703,7 +823,7 @@ export function computeMeasurementQuality(input: QualityInput): MeasurementQuali
     })
   }
 
-  // 2) Εγκυρότητα μοντέλου διάθλασης (καλός αγωγός/διηλεκτρικό: tan δ)
+  // 2) Εγκυρότητα μοντέλου διάθλασης (καλός αγωγός/διηλεκτρ��κό: tan δ)
   {
     const lt = input.lossTangent
     let score = 0.5

@@ -53,6 +53,7 @@ import { ExportButtons } from "./export-buttons"
 import { TriangulationPanel } from "./triangulation-panel"
 import { SuspectSitesPanel } from "./suspect-sites-panel"
 import { CachingToolsPanel } from "./caching-tools"
+import { MineralizationPanel } from "./mineralization-panel"
 
 export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
   // Location / field
@@ -889,6 +890,9 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
           <div className="h-full bg-gradient-to-r from-phosphor-dim to-phosphor transition-all" style={{ width: `${attenPct}%` }} />
         </div>
       </Panel>
+
+      {/* Section 3β — Mineralization rejection filter */}
+      <MineralizationPanel targetHz={fSelected} targetLabel={`${fSelFmt.val} ${fSelFmt.unit}`} />
 
       {/* Section 4 — Target metal skin depth */}
       <Panel
