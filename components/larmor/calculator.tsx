@@ -334,7 +334,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
   const chartData = harmonics.map((h) => ({ n: h.n, soil: h.dSoil, metal: h.dMetal }))
 
   // Section 6 refraction — η κύρια γραμμή υπολογίζεται στη συχνότητα εκπομπής (fSelected).
-  // Ο πίνακας δείχνει και τις υπόλοιπες ομαδοποιημένες ζώνες για σύγκριση.
+  // Ο πίνακας δείχνει και τις υπόλοιπες ομαδ��ποιημένες ζώνες για σύγκριση.
   const refraction = useMemo(() => {
     const [epsStr, sigStr] = sec6Soil.split("|")
     const epsilon_r = Number.parseFloat(epsStr)
@@ -463,6 +463,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
       target_bearing_deg: endpoint.bearingDeg,
       target_distance_km: endpoint.distanceKm,
       target_confidence: estimatedTarget.confidence,
+      target_quality_grade: quality.grade,
       notes: "",
     }
   }
@@ -494,6 +495,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
     estimateDistanceKm: endpoint.distanceKm,
     estimateBearingDeg: endpoint.bearingDeg,
     estimateConfidence: estimatedTarget.confidence,
+    estimateQualityGrade: quality.grade,
   }
 
   return (
