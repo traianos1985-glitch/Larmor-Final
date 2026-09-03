@@ -340,6 +340,93 @@ export function findOptimalCombo(
   return { n: bestN, f: f0 * bestN, score: bestScore }
 }
 
+/* ============================================================
+   ΦΙΛΤΡΟ ΑΠΟΡΡΙΨΗΣ ΟΡΥΚΤΟΠΟΙΗΣΗΣ (Mineralization Rejection)
+   ------------------------------------------------------------
+   ΔΕΝ παράγει νέες συχνότητες ούτε νέους κανόνες. Προσθέτει ΜΟΝΟ ένα
+   ακόμη κριτήριο ταξινόμησης πάνω στις ήδη υπάρχουσες ομαδοποιημένες
+   αρμονικές: πόσο μακριά πέφτει κάθε αρμονική από τη «ζώνη θορύβου»
+   του μαγνητικού/ορυκτοποιημένου εδάφους.
+
+   Φυσική βάση (ίδιες παράμετροι που ήδη χρησιμοποιεί η εφαρμογή):
+   Το έδαφος συμπεριφέρεται ως αγωγός όταν tan δ = σ/(ωε₀ε_r) ≫ 1 και
+   ως διηλεκτρικό όταν tan δ ≪ 1. Η μετάβαση γίνεται στη «γωνιακή»
+   συχνότητα ορυκτοποίησης:
+
+       f_c = σ / (2π · ε₀ · ε_r)          (tan δ = 1)
+
+   • f ≪ f_c → ζώνη αγωγιμότητας/ορυκτοποίησης: υψηλός θόρυβος εδάφους,
+     «βρόμικη» γραμμή.
+   • f ≫ f_c → διηλεκτρική ζώνη: το έδαφος γίνεται σχεδόν διαφανές,
+     καθαρότερη γραμμή.
+
+   Η «απόσταση από τη ζώνη» μετριέται σε δεκάδες (log₁₀ f/f_c). Όσο πιο
+   πάνω από την f_c βρίσκεται η αρμονική, τόσο καθαρότερη.
+============================================================ */
+export interface MineralizationInfo {
+  /** Γωνιακή συχνότητα ορυκτοποίησης f_c = σ/(2π ε₀ ε_r), Hz */
+  fc: number
+  /** log₁₀(f/f_c): θετικό = πάνω από τη ζώνη (καθαρό), αρνητικό = μέσα στη ζώνη */
+  clearanceDecades: number
+  /** Δείκτης καθαρότητας ∈ [0,1] — όσο μεγαλύτερος, τόσο μακριά από τη ζώνη θορύβου */
+  score: number
+  status: "good" | "warn" | "bad"
+}
+
+/** Συχνότητα μετάβασης αγωγού→διηλεκτρικού (tan δ = 1) του εδάφους. */
+export function mineralizationCornerHz(sigmaSoil: number, epsRSoil: number): number {
+  if (sigmaSoil <= 0) return 0
+  return sigmaSoil / (2 * Math.PI * EPSILON_0 * Math.max(epsRSoil, 1e-6))
+}
+
+/** Δείκτης απόρριψης ορυκτοποίησης για μία συχνότητα f, με βάση την απόστασή
+ *  της (σε δεκάδες) από τη ζώνη θορύβου του εδάφους f_c. */
+export function mineralizationRejection(f: number, sigmaSoil: number, epsRSoil = 10): MineralizationInfo {
+  const fc = mineralizationCornerHz(sigmaSoil, epsRSoil)
+  if (f <= 0 || fc <= 0) {
+    return { fc, clearanceDecades: Number.POSITIVE_INFINITY, score: 1, status: "good" }
+  }
+  const clearanceDecades = Math.log10(f / fc)
+  // Γραμμικός δείκτης στις δεκάδες: f=f_c → 0.5, +2 δεκ. → 1.0, −2 δεκ. → 0.
+  const score = Math.max(0, Math.min(1, 0.5 + clearanceDecades / 4))
+  const status: MineralizationInfo["status"] =
+    clearanceDecades >= 1 ? "good" : clearanceDecades >= -0.3 ? "warn" : "bad"
+  return { fc, clearanceDecades, score, status }
+}
+
+/**
+ * Σύσταση «καθαρής» αρμονικής ΜΕΣΑ από τις ήδη υπάρχουσες ζώνες.
+ * Διατηρεί όλα τα υπάρχοντα κριτήρια (skin depth εδάφους × ανακλαστική
+ * απόκριση R_eff = |Γ|²·(1 − e^(−t/δ_metal))) και προσθέτει ΜΟΝΟ τον
+ * παράγοντα καθαρότητας ορυκτοποίησης. Επιστρέφει την ετικέτα ζώνης με
+ * το μεγαλύτερο σύνθετο σκορ — δεν εφευρίσκει καμία συχνότητα εκτός λίστας.
+ */
+export function recommendCleanBand(
+  candidates: { label: string; f: number }[],
+  sigmaSoil: number,
+  mat: Material,
+  thicknessMm: number,
+  epsRSoil = 10,
+): { label: string; composite: number } | null {
+  if (!candidates.length) return null
+  let best: { label: string; composite: number } | null = null
+  for (const c of candidates) {
+    if (!(c.f > 0)) continue
+    const dSoil = skinDepth(c.f, sigmaSoil)
+    const dMetal = skinDepth(c.f, mat.sigma, mat.muR)
+    const metalResp = metalSkinResponse(thicknessMm, dMetal)
+    const fresnelR = fresnelReflection(mat.sigma, mat.muR, sigmaSoil, epsRSoil, c.f)
+    const rEff = fresnelR * metalResp
+    // Υπάρχοντα κριτήρια (ίδια με το ★ Βέλτιστο): δ_soil × R_eff.
+    const merit = (isFinite(dSoil) ? dSoil : 0) * rEff
+    // Νέο κριτήριο: πολλαπλασιαστής καθαρότητας ζώνης ορυκτοποίησης.
+    const { score } = mineralizationRejection(c.f, sigmaSoil, epsRSoil)
+    const composite = merit * score
+    if (!best || composite > best.composite) best = { label: c.label, composite }
+  }
+  return best
+}
+
 export function fmtBandFrequency(f: number, criterion: Criterion): string {
   try {
     switch (criterion) {
@@ -703,7 +790,7 @@ export function computeMeasurementQuality(input: QualityInput): MeasurementQuali
     })
   }
 
-  // 2) Εγκυρότητα μοντέλου διάθλασης (καλός αγωγός/διηλεκτρικό: tan δ)
+  // 2) Εγκυρότητα μοντέλου διάθλασης (καλός αγωγός/διηλεκτρ��κό: tan δ)
   {
     const lt = input.lossTangent
     let score = 0.5
