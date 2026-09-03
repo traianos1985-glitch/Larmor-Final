@@ -137,6 +137,39 @@ export const BANDS: BandDef[] = [
   { label: "★ Βέλτιστος", target: null, criterion: "optimal" },
 ]
 
+/* ============================================================
+   ΤΥΠΟΣ ΕΚΠΟΜΠΗΣ ΓΕΝΝΗΤΡΙΑΣ — Ημίτονο / Τετράγωνο
+   Η κυματομορφή εξόδου καθορίζει ΠΟΙΕΣ αρμονικές υπάρχουν στο σήμα:
+   • Ημίτονο (sine): καθαρή θεμελιώδης — καμία αρμονική (μόνο n=1).
+   • Τετράγωνο (square): σειρά Fourier με ΜΟΝΟ περιττές αρμονικές
+     (n = 1, 3, 5, 7, …) και σχετικό πλάτος 1/n.
+============================================================ */
+export type Waveform = "sine" | "square"
+
+export interface WaveformDef {
+  value: Waveform
+  label: string
+  desc: string
+}
+
+export const WAVEFORMS: WaveformDef[] = [
+  { value: "sine", label: "Ημίτονο (Sine)", desc: "Καθαρή θεμελιώδης — χωρίς αρμονικές (μόνο n=1)." },
+  { value: "square", label: "Τετράγωνο (Square)", desc: "Μόνο περιττές αρμονικές (n = 1, 3, 5, …), πλάτος 1/n." },
+]
+
+/** Σχετικό πλάτος της n-οστής αρμονικής για δεδομένη κυματομορφή (θεμελιώδης = 1). */
+export function harmonicAmplitude(waveform: Waveform, n: number): number {
+  if (n < 1) return 0
+  if (waveform === "sine") return n === 1 ? 1 : 0
+  // Τετράγωνο: σειρά Fourier — μόνο περιττές αρμονικές, πλάτος 1/n.
+  return n % 2 === 1 ? 1 / n : 0
+}
+
+/** Υπάρχει η n-οστή αρμονική στο φάσμα της κυματομορφής; */
+export function isHarmonicPresent(waveform: Waveform, n: number): boolean {
+  return harmonicAmplitude(waveform, n) > 0
+}
+
 export function satisfiesCriterion(f: number, criterion: Criterion): boolean {
   switch (criterion) {
     case "2dec":
@@ -154,10 +187,22 @@ export function findNearestHarmonic(
   f0: number,
   targetHz: number,
   criterion: Criterion,
+  isAllowed: (n: number) => boolean = () => true,
 ): { n: number; f: number } {
   if (f0 <= 0 || targetHz <= 0) return { n: 1, f: f0 }
   const n0 = Math.max(1, Math.round(targetHz / f0))
-  if (criterion === "2dec") return { n: n0, f: f0 * n0 }
+
+  // Για την «2dec» κάθε συχνότητα ικανοποιεί το κριτήριο, οπότε αρκεί η πλησιέστερη
+  // ΕΠΙΤΡΕΠΤΗ αρμονική στο n0 (π.χ. περιττή για τετράγωνο, μόνο n=1 για ημίτονο).
+  if (criterion === "2dec") {
+    if (isAllowed(n0)) return { n: n0, f: f0 * n0 }
+    for (let dn = 1; dn <= 250; dn++) {
+      for (const n of [n0 + dn, n0 - dn]) {
+        if (n >= 1 && isAllowed(n)) return { n, f: f0 * n }
+      }
+    }
+    return { n: n0, f: f0 * n0 }
+  }
 
   const WINDOW = 250
   let bestN: number | null = null
@@ -165,7 +210,7 @@ export function findNearestHarmonic(
   for (let dn = 0; dn <= WINDOW; dn++) {
     const candidates = dn === 0 ? [n0] : [n0 + dn, n0 - dn]
     for (const n of candidates) {
-      if (n < 1) continue
+      if (n < 1 || !isAllowed(n)) continue
       const f = f0 * n
       if (satisfiesCriterion(f, criterion)) {
         const dist = Math.abs(f - targetHz)
@@ -258,6 +303,7 @@ export function findOptimalCombo(
   mat: Material,
   thicknessMm: number,
   soilEpsR = 10,
+  isAllowed: (n: number) => boolean = () => true,
 ): { n: number; f: number; score: number } | null {
   if (f0 <= 0) return null
   const t = thicknessMm / 1000
@@ -270,12 +316,12 @@ export function findOptimalCombo(
 
   const n0 = Math.max(1, Math.round(fOpt / f0))
   const WINDOW = 1500
-  let bestN = n0
+  let bestN = isAllowed(n0) ? n0 : 1
   let bestScore = Number.NEGATIVE_INFINITY
 
   for (let dn = -WINDOW; dn <= WINDOW; dn++) {
     const n = n0 + dn
-    if (n < 1) continue
+    if (n < 1 || !isAllowed(n)) continue
     const f = f0 * n
     const omega = 2 * Math.PI * f
     const dSoil = sigmaSoil > 0 ? Math.sqrt(2 / (omega * MU0 * sigmaSoil)) : 0

@@ -15,6 +15,10 @@ import {
   skinDepth,
   findNearestHarmonic,
   findOptimalCombo,
+  WAVEFORMS,
+  harmonicAmplitude,
+  isHarmonicPresent,
+  type Waveform,
   fmtFrequency,
   fmtHzOnly,
   fmtLength,
@@ -65,6 +69,8 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
   const [maxharm, setMaxharm] = useState(8)
   const [selectedN, setSelectedN] = useState(1)
   const [unitMultiplier, setUnitMultiplier] = useState(1)
+  // Τύπος εκπομπής γεννήτριας — καθορίζει ποιες αρμονικές υπάρχουν στο σήμα.
+  const [waveform, setWaveform] = useState<Waveform>("square")
 
   // Soil skin depth (section 3) — το «Εκτιμώμενο βάθος στόχου» είναι ΜΙΑ κοινή τιμή
   // που τροφοδοτεί όλα τα sections που χρειάζονται βάθος (3 και 6).
@@ -114,6 +120,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
         if (typeof s.materialId === "string") setMaterialId(s.materialId)
         if (Number.isFinite(s.maxharm)) setMaxharm(s.maxharm)
         if (Number.isFinite(s.selectedN)) setSelectedN(s.selectedN)
+        if (s.waveform === "sine" || s.waveform === "square") setWaveform(s.waveform)
         if (Number.isFinite(s.unitMultiplier)) setUnitMultiplier(s.unitMultiplier)
         if (typeof s.soilType === "string") setSoilType(s.soilType)
         if (Number.isFinite(s.sigmaCustom)) setSigmaCustom(s.sigmaCustom)
@@ -144,7 +151,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
         STATE_KEY,
         JSON.stringify({
           lat, lon, elev, date, bfield, bSource, geomag,
-          materialId, maxharm, selectedN, unitMultiplier,
+          materialId, maxharm, selectedN, waveform, unitMultiplier,
           soilType, sigmaCustom, targetDepth,
           sec6Soil, sec6Theta, sec6H, dipoleAxis,
           generatorLat, generatorLon, generatorFrequency, generatorBandLabel,
@@ -173,7 +180,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
     setActivePreset(id)
   }
 
-  // Ένα-πάτημα GPS για το παρατηρούμενο (τελικό) σημείο — γεμίζει lat/lon αυτόματα.
+  // Ένα-πάτημα GPS για το ��αρατηρούμενο (τελικό) σημείο — γεμίζει lat/lon αυτόματα.
   function useCurrentTargetLocation() {
     if (typeof navigator === "undefined" || !navigator.geolocation) {
       setGpsStatus("Το GPS δεν υποστηρίζεται σε αυτή τη συσκευή.")
@@ -201,29 +208,35 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
 
   const f0fmt = fmtFrequency(f0)
 
-  // Harmonics rows
+  // Harmonics rows — το πλάτος/παρουσία κάθε αρμονικής εξαρτάται από την κυματομορφή
+  // εκπομπής (ημίτονο: μόνο n=1· τετράγωνο: περιττές, πλάτος 1/n).
   const harmonics = useMemo(() => {
     const rows = []
     for (let i = 1; i <= maxharm; i++) {
       const f = f0 * i
+      const amp = harmonicAmplitude(waveform, i)
       rows.push({
         n: i,
         f,
+        amp,
+        present: amp > 0,
         dSoil: skinDepth(f, sigmaSoil),
         dMetal: skinDepth(f, mat.sigma, mat.muR),
       })
     }
     return rows
-  }, [f0, maxharm, sigmaSoil, mat])
+  }, [f0, maxharm, sigmaSoil, mat, waveform])
 
-  // Bands
+  // Bands — οι αρμονικές που μπορεί να εκπέμψει η γεννήτρια περιορίζονται από
+  // την κυματομορφή (π.χ. τετράγωνο → μόνο περιττά n· ημίτονο → μόνο n=1).
   const bands = useMemo(() => {
     if (f0 <= 0) return []
+    const allowed = (n: number) => isHarmonicPresent(waveform, n)
     return BANDS.map((band) => {
       const result =
         band.criterion === "optimal"
-          ? findOptimalCombo(f0, sigmaSoil, mat, rMm)
-          : findNearestHarmonic(f0, band.target as number, band.criterion)
+          ? findOptimalCombo(f0, sigmaSoil, mat, rMm, 10, allowed)
+          : findNearestHarmonic(f0, band.target as number, band.criterion, allowed)
       if (!result) return null
       const f = result.f
       return {
@@ -244,7 +257,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
       dSoil: number
       dMetal: number
     }[]
-  }, [f0, sigmaSoil, mat, rMm])
+  }, [f0, sigmaSoil, mat, rMm, waveform])
 
   // ── Επιλεγμένη συχνότητα εκπομπής (από τις ομαδοποιημένες ζώνες, section 2β) ──
   // Αυτή είναι η ΜΙΑ συχνότητα που τροφοδοτεί όλους τους παρακάτω υπολογισμούς:
@@ -658,13 +671,46 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
           Ακριβής τιμή (πλήρης ακρίβεια IEEE-754 double):{" "}
           <span className="text-phosphor">{f0.toString()} Hz</span>
         </p>
+
+        {/* Τύπος εκπομπής γεννήτριας — καθορίζει ποιες αρμονικές υπάρχουν παρακάτω */}
+        <div className="mt-4 border-t border-panel-line pt-4">
+          <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Τύπος εκπομπής γεννήτριας</p>
+          <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Τύπος εκπομπής γεννήτριας">
+            {WAVEFORMS.map((w) => (
+              <button
+                key={w.value}
+                type="button"
+                role="radio"
+                aria-checked={waveform === w.value}
+                title={w.desc}
+                onClick={() => setWaveform(w.value)}
+                className={
+                  "flex-1 rounded-sm border px-3 py-2 text-left font-mono text-[0.72rem] transition-colors sm:flex-none " +
+                  (waveform === w.value
+                    ? "border-brass bg-secondary/50 text-brass"
+                    : "border-panel-line text-muted-foreground hover:border-brass-dim hover:text-foreground")
+                }
+              >
+                <span className="block font-semibold">
+                  {waveform === w.value ? "▸ " : ""}
+                  {w.label}
+                </span>
+                <span className="mt-0.5 block text-[0.64rem] leading-snug text-muted-foreground">{w.desc}</span>
+              </button>
+            ))}
+          </div>
+        </div>
       </Panel>
 
       {/* Section 2 — Harmonics */}
       <Panel
         step="2"
         title="Αρμονικές"
-        desc="Ακέ��αια πολλαπλάσια της θεμελιώδο��ς συχνότητας. Κάνε κλικ σε γραμμή του φάσματος για επιλογή αρμονικής."
+        desc={
+          waveform === "sine"
+            ? "Το ημίτονο εκπέμπει καθαρή θεμελιώδη — δεν παράγει αρμονικές. Οι υπόλοιπες γραμμές εμφανίζονται αμυδρά ως μη εκπεμπόμενες."
+            : "Το τετράγωνο εκπέμπει μόνο περιττές αρμονικές (n = 1, 3, 5, …) με σχετικό πλάτος 1/n. Οι άρτιες δεν υπάρχουν στο σήμα. Κάνε κλικ σε γραμμή για επιλογή."
+        }
       >
         <Field label="Πλήθος εμφανιζόμενων αρμονικών (n)" htmlFor="maxharm">
           <input
@@ -677,13 +723,20 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
             onChange={(e) => setMaxharm(Math.max(2, Math.min(16, Number.parseInt(e.target.value) || 8)))}
           />
         </Field>
-        <Spectrum count={maxharm} active={selectedN} onSelect={setSelectedN} />
+        <div className="mt-3 flex items-center gap-2 font-mono text-[0.7rem] text-muted-foreground">
+          <span className="uppercase tracking-wide">Κυματομορφή:</span>
+          <span className="rounded-sm border border-brass-dim px-2 py-0.5 text-brass">
+            {waveform === "sine" ? "Ημίτονο — μόνο θεμελιώδης" : "Τετράγωνο — περιττές αρμονικές (1/n)"}
+          </span>
+        </div>
+        <Spectrum count={maxharm} active={selectedN} onSelect={setSelectedN} amplitudes={harmonics.map((h) => h.amp)} />
         <div className="mt-4 overflow-x-auto">
           <table className="w-full font-mono text-sm">
             <thead>
               <tr className="text-left text-[0.72rem] uppercase tracking-wide text-muted-foreground">
                 <th className="border-b border-panel-line px-2.5 py-2">n</th>
                 <th className="border-b border-panel-line px-2.5 py-2">Συχνότητα (Hz)</th>
+                <th className="border-b border-panel-line px-2.5 py-2">Πλάτος</th>
                 <th className="border-b border-panel-line px-2.5 py-2">δ έδαφος · δ μέταλλο</th>
               </tr>
             </thead>
@@ -692,16 +745,22 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
                 <tr
                   key={h.n}
                   className={
-                    h.n === selectedN
-                      ? "cursor-pointer bg-secondary/40"
-                      : "cursor-pointer hover:bg-secondary/20"
+                    !h.present
+                      ? "cursor-pointer text-muted-foreground/40 hover:bg-secondary/10"
+                      : h.n === selectedN
+                        ? "cursor-pointer bg-secondary/40"
+                        : "cursor-pointer hover:bg-secondary/20"
                   }
                   onClick={() => setSelectedN(h.n)}
+                  title={h.present ? undefined : "Δεν εκπέμπεται από αυτή την κυματομορφή"}
                 >
-                  <td className={"border-b border-panel-line px-2.5 py-2 " + (h.n === 1 ? "text-phosphor" : "")}>n={h.n}</td>
-                  <td className={"border-b border-panel-line px-2.5 py-2 " + (h.n === 1 ? "text-phosphor" : "")}>{fmtHzOnly(h.f)}</td>
+                  <td className={"border-b border-panel-line px-2.5 py-2 " + (h.present && h.n === 1 ? "text-phosphor" : "")}>n={h.n}</td>
+                  <td className={"border-b border-panel-line px-2.5 py-2 " + (h.present && h.n === 1 ? "text-phosphor" : "")}>{fmtHzOnly(h.f)}</td>
+                  <td className="border-b border-panel-line px-2.5 py-2">
+                    {h.present ? (h.amp === 1 ? "1.00" : h.amp.toFixed(3)) : "— (απών)"}
+                  </td>
                   <td className="border-b border-panel-line px-2.5 py-2 text-muted-foreground">
-                    {fmtLength(h.dSoil)} · {fmtLength(h.dMetal)}
+                    {h.present ? `${fmtLength(h.dSoil)} · ${fmtLength(h.dMetal)}` : "—"}
                   </td>
                 </tr>
               ))}
