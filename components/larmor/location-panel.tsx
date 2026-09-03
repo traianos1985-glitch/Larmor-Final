@@ -2,9 +2,16 @@
 
 import { useState } from "react"
 import dynamic from "next/dynamic"
-import { MapPin, Radio, Calculator, Crosshair } from "lucide-react"
+import { MapPin, Radio, Calculator, Crosshair, Droplets, Mountain, Check } from "lucide-react"
 import { Panel, Field, Readout, inputClass, buttonClass } from "./primitives"
-import { computeDipoleField, computeDipoleInclination } from "@/lib/physics"
+import {
+  computeDipoleField,
+  computeDipoleInclination,
+  classifySoilFromMoisture,
+  classifyMagneticMineralization,
+  type SoilClassification,
+  type MagneticMineralization,
+} from "@/lib/physics"
 
 const MapPicker = dynamic(() => import("./map-picker"), {
   ssr: false,
@@ -50,6 +57,7 @@ export function LocationPanel({
   setGeneratorLon,
   setObservedLat,
   setObservedLon,
+  onApplySoil,
 }: {
   lat: number
   lon: number
@@ -72,12 +80,20 @@ export function LocationPanel({
   setGeneratorLon: (v: number) => void
   setObservedLat: (v: number) => void
   setObservedLon: (v: number) => void
+  onApplySoil: (soilTypeValue: string, sec6SoilValue: string) => void
 }) {
   const [status, setStatus] = useState("Αναμονή")
   const [statusTone, setStatusTone] = useState<"muted" | "phosphor" | "brass">("muted")
   const [busy, setBusy] = useState(false)
   const [gpsBusy, setGpsBusy] = useState(false)
   const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null)
+
+  // Αυτόματη ανάλυση εδάφους περιοχής: υγρασία (Open-Meteo) → τύπος εδάφους,
+  // και μαγνητική ανωμαλία φλοιού (NOAA EMAG2) → επίπεδο ορυκτοποίησης.
+  const [soil, setSoil] = useState<SoilClassification | null>(null)
+  const [mineral, setMineral] = useState<MagneticMineralization | null>(null)
+  const [soilBusy, setSoilBusy] = useState(false)
+  const [soilApplied, setSoilApplied] = useState(false)
 
   function useCurrentLocation() {
     if (!navigator.geolocation) {
@@ -109,6 +125,8 @@ export function LocationPanel({
         void fetchElevation(la, lo)
         // Υπολόγισε αμέσως το πεδίο B με το NOAA WMM για τη νέα θέση.
         void fetchLiveB(la, lo)
+        // Αυτόματη ανάλυση εδάφους (υγρασία) + μαγνητικής ορυκτοποίησης (EMAG2).
+        void fetchRegionSoil(la, lo)
         setStatus(acc != null ? `Τοποθεσία OK — ακρίβεια ±${acc} m.` : "Τοποθεσία OK — ο χάρτης μεταφέρθηκε.")
         setStatusTone("phosphor")
         setGpsBusy(false)
@@ -241,6 +259,72 @@ export function LocationPanel({
     setStatusTone("brass")
   }
 
+  // Αυτόματη ανάλυση εδάφους & ορυκτοποίησης για την περιοχή (δωρεάν APIs, client-side):
+  //  • Υγρασία εδάφους από Open-Meteo (ογκομετρική θ) → τύπος εδάφους (σ, ε_r).
+  //  • Μαγνητική ανωμαλία φλοιού από NOAA EMAG2 v3 → επίπεδο ορυκτοποίησης.
+  async function fetchRegionSoil(latArg: number = lat, lonArg: number = lon) {
+    if (!Number.isFinite(latArg) || !Number.isFinite(lonArg)) return
+    if (latArg < -90 || latArg > 90 || lonArg < -180 || lonArg > 180) return
+    setSoilBusy(true)
+    setSoilApplied(false)
+
+    // (α) Υγρασία εδάφους (Open-Meteo) — τρέχουσα τιμή στα 0-1 cm.
+    const soilPromise = (async () => {
+      try {
+        const url =
+          `https://api.open-meteo.com/v1/forecast?latitude=${latArg}&longitude=${lonArg}` +
+          `&current=soil_moisture_0_to_1cm&timezone=auto&forecast_days=1`
+        const res = await fetch(url, { headers: { Accept: "application/json" } })
+        if (!res.ok) return null
+        const data = await res.json()
+        const vwc = Number(data?.current?.soil_moisture_0_to_1cm)
+        if (!Number.isFinite(vwc)) return null
+        return classifySoilFromMoisture(vwc)
+      } catch {
+        return null
+      }
+    })()
+
+    // (β) Μαγνητική ανωμαλία φλοιού (NOAA EMAG2 v3 ImageServer identify).
+    const emagPromise = (async () => {
+      try {
+        const geometry = encodeURIComponent(
+          JSON.stringify({ x: lonArg, y: latArg, spatialReference: { wkid: 4326 } }),
+        )
+        const url =
+          `https://gis.ngdc.noaa.gov/arcgis/rest/services/EMAG2v3/ImageServer/identify` +
+          `?geometry=${geometry}&geometryType=esriGeometryPoint&returnGeometry=false&returnCatalogItems=false&f=json`
+        const res = await fetch(url, { headers: { Accept: "application/json" } })
+        if (!res.ok) return null
+        const data = await res.json()
+        const raw = data?.value
+        if (raw == null || raw === "NoData") return null
+        const anomaly = Number(raw)
+        if (!Number.isFinite(anomaly)) return null
+        return classifyMagneticMineralization(anomaly)
+      } catch {
+        return null
+      }
+    })()
+
+    const [soilResult, mineralResult] = await Promise.all([soilPromise, emagPromise])
+    setSoil(soilResult)
+    setMineral(mineralResult)
+    setSoilBusy(false)
+
+    // Πλήρως αυτόματο: ο τύπος εδάφους εφαρμόζεται αμέσως στους υπολογισμούς
+    // (skin depth section 3 + διάθλαση section 6) μόλις εντοπιστεί.
+    if (soilResult) {
+      onApplySoil(soilResult.soilTypeValue, soilResult.sec6SoilValue)
+      setSoilApplied(true)
+    }
+
+    if (!soilResult && !mineralResult) {
+      setStatus((s) => `${s} Ανάλυση εδάφους/ορυκτοποίησης μη διαθέσιμη για την περιοχή.`)
+      setStatusTone("brass")
+    }
+  }
+
   return (
     <Panel
       step="1"
@@ -324,6 +408,15 @@ export function LocationPanel({
             <button type="button" className={buttonClass + " flex items-center gap-2"} onClick={() => useDipoleFallback()}>
               <Calculator className="size-4" /> Offline εκτίμηση (dipole)
             </button>
+            <button
+              type="button"
+              className={buttonClass + " flex items-center gap-2"}
+              onClick={() => fetchRegionSoil()}
+              disabled={soilBusy}
+            >
+              <Droplets className={"size-4" + (soilBusy ? " animate-pulse" : "")} />
+              {soilBusy ? "Ανάλυση εδάφους…" : "Ανάλυση εδάφους & ορυκτοποίησης"}
+            </button>
           </div>
         </div>
 
@@ -367,6 +460,72 @@ export function LocationPanel({
       <p className="mt-3 font-mono text-[0.68rem] leading-relaxed text-muted-foreground">
         Απόκλιση D = {geomag.D.toFixed(2)}° · Κλίση I = {geomag.I.toFixed(2)}° · Αβεβαιότ��τα F = {geomag.uncertainty == null ? "—" : `±${geomag.uncertainty.toFixed(3)} µT`} · Secular variation: D {geomag.secularVariation.D == null ? "—" : `${geomag.secularVariation.D.toFixed(2)}���/yr`}, I {geomag.secularVariation.I == null ? "—" : `${geomag.secularVariation.I.toFixed(2)}′/yr`}, F {geomag.secularVariation.F == null ? "—" : `${geomag.secularVariation.F.toFixed(3)} µT/yr`}.
       </p>
+
+      {/* Αυτόματος τύπος εδάφους (υγρασία Open-Meteo) + μαγνητική ορυκτοποίηση (NOAA EMAG2) */}
+      {(soil || mineral || soilBusy) && (
+        <div className="mt-4 rounded-sm border border-panel-line bg-readout p-3.5">
+          <p className="mb-3 flex items-center gap-2 font-mono text-[0.72rem] uppercase tracking-wide text-muted-foreground">
+            <Mountain className="size-3.5 text-brass" /> Έδαφος & ορυκτοποίηση περιοχής
+            <span className="ml-auto normal-case tracking-normal text-[0.62rem] text-muted-foreground">
+              Open-Meteo · NOAA EMAG2 v3
+            </span>
+          </p>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Readout
+              label="Υγρασία εδάφους (0-1 cm)"
+              value={soil ? (soil.vwc * 100).toFixed(1) : soilBusy ? "…" : "—"}
+              unit="% vol"
+              tone="phosphor"
+            />
+            <Readout
+              label="Αυτόματος τύπος εδάφους"
+              value={soil ? soil.label : "—"}
+              tone="brass"
+            />
+            <Readout
+              label="Μαγν. ανωμαλία (EMAG2)"
+              value={mineral ? mineral.anomalyNt.toFixed(1) : soilBusy ? "…" : "—"}
+              unit="nT"
+              tone="muted"
+            />
+            <Readout
+              label="Επίπεδο ορυκτοποίησης"
+              value={mineral ? mineral.label : "—"}
+              tone={
+                mineral == null
+                  ? "muted"
+                  : mineral.level === "low"
+                    ? "phosphor"
+                    : "brass"
+              }
+            />
+          </div>
+
+          {soil && (
+            <p className="mt-3 font-mono text-[0.68rem] leading-relaxed text-muted-foreground">
+              Εκτίμηση: σ ≈ {soil.sigma.toExponential(1)} S/m · ε_r ≈ {soil.epsR.toFixed(1)} (Topp).
+              {mineral ? ` Δείκτης θορύβου ορυκτοποίησης ${(mineral.noiseIndex * 100).toFixed(0)}%.` : ""}
+            </p>
+          )}
+
+          {soil && (
+            <button
+              type="button"
+              className={buttonClass + " mt-3 flex items-center gap-2"}
+              onClick={() => {
+                onApplySoil(soil.soilTypeValue, soil.sec6SoilValue)
+                setSoilApplied(true)
+              }}
+            >
+              <Check className="size-4" />
+              {soilApplied
+                ? "Εφαρμόστηκε αυτόματα ✓ — πάτα για εκ νέου εφαρμογή"
+                : "Εφαρμογή τύπου εδάφους στους υπολογισμούς"}
+            </button>
+          )}
+        </div>
+      )}
     </Panel>
   )
 }
