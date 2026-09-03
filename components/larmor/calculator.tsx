@@ -180,7 +180,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
     setActivePreset(id)
   }
 
-  // Ένα-πάτημα GPS για το παρατηρούμενο (τελικό) σημείο — γεμίζει lat/lon αυτόματα.
+  // Ένα-πάτημα GPS για το ��αρατηρούμενο (τελικό) σημείο — γεμίζει lat/lon αυτόματα.
   function useCurrentTargetLocation() {
     if (typeof navigator === "undefined" || !navigator.geolocation) {
       setGpsStatus("Το GPS δεν υποστηρίζεται σε αυτή τη συσκευή.")
@@ -257,7 +257,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
       dSoil: number
       dMetal: number
     }[]
-  }, [f0, sigmaSoil, mat, rMm])
+  }, [f0, sigmaSoil, mat, rMm, waveform])
 
   // ── Επιλεγμένη συχνότητα εκπομπής (από τις ομαδοποιημένες ζώνες, section 2β) ──
   // Αυτή είναι η ΜΙΑ συχνότητα που τροφοδοτεί όλους τους παρακάτω υπολογισμούς:
