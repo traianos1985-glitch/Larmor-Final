@@ -334,7 +334,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
   const chartData = harmonics.map((h) => ({ n: h.n, soil: h.dSoil, metal: h.dMetal }))
 
   // Section 6 refraction — η κύρια γραμμή υπολογίζεται στη συχνότητα εκπομπής (fSelected).
-  // Ο πίνακας δείχνει και τις υπόλοιπες ομαδ����ποιημένες ζώνες για σύγκριση.
+  // Ο πίνακας δείχνει και τις υπόλοιπες ομαδ������ποιημένες ζώνες για σύγκριση.
   const refraction = useMemo(() => {
     const [epsStr, sigStr] = sec6Soil.split("|")
     const epsilon_r = Number.parseFloat(epsStr)
@@ -527,7 +527,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
 
       {tab === "mapping" && (
         <>
-      <Panel step="7" title="Τελική χαρτογράφηση & πειραματική εκτίμηση θέσης" desc="Αφού επιλέξεις υλικό, πεδίο και συχνότητα, κατέ��ραψε τη γεννήτρια και το σημείο που δείχνουν οι βέργες. Η απόσταση και η διόπτευση είναι πειραματικές εκτιμήσεις.">
+      <Panel step="7" title="Τελική χαρτογράφηση & πειραματική εκτίμηση θέσης" desc="Αφού επιλέξεις υλικό, πεδίο και συχνότητα, κ��τέ��ραψε τη γεννήτρια και το σημείο που δείχνουν οι βέργες. Η απόσταση και η διόπτευση είναι πειραματικές εκτιμήσεις.">
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Γεννήτρια · πλάτος" htmlFor="generator-lat" warn={validateLat(generatorLat)}><input id="generator-lat" type="number" step="0.000001" min={-90} max={90} className={inputClass} value={generatorLat} onChange={(e) => applyGeneratorLat(Number.parseFloat(e.target.value) || 0)} /></Field>
@@ -824,14 +824,6 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
           <span className="text-[0.68rem] text-muted-foreground">Κλικ σε ζώνη για επιλογή</span>
         </div>
 
-        {waveform === "sine" && (
-          <div className="mb-3 rounded-sm border border-brass-dim/60 bg-secondary/20 px-3 py-2.5 font-mono text-[0.72rem] leading-relaxed text-muted-foreground">
-            <span className="text-brass">Ημίτονο:</span> η γεννήτρια εκπέμπει μόνο τη θεμελιώδη (n=1), οπότε καμία ανώτερη
-            αρμονική δεν υπάρχει στο σήμα. Όλες οι ζώνες-στόχοι «πέφτουν» στην ίδια θεμελιώδη συχνότητα f₀ — η στήλη Δf
-            δείχνει πόσο μακριά βρίσκεται κάθε στόχος. Για πρόσβαση σε ανώτερες ζώνες, επίλεξε τετράγωνη κυματομορφή.
-          </div>
-        )}
-
         {/* Αναβάθμιση #3 — Φίλτρο απόρριψης ορυκτοποίησης: σύσταση καθαρής ζώνης */}
         {mineralization && mineralization.recommendedLabel && (
           <div className="mb-3 rounded-sm border border-phosphor-dim/60 bg-secondary/20 px-3 py-2.5 font-mono text-[0.72rem]">
@@ -1036,7 +1028,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
             : metalRatio < 0.5
               ? "Ισοδ. ακτίνα ≪ δ_target: ολόκληρος ο όγκος συμμετέχει (πλήρης διείσδυση)."
               : metalRatio < 3
-                ? "Ισοδ. ακτίνα ≈ δ_target: μερική διείσδυση — απόκριση κυρίως από το εξωτερικό στρώμα."
+                ? "Ισοδ. ακτίνα ≈ ��_target: μερική διείσδυση — απόκριση κυρίως από το εξωτερικό στρώμα."
                 : "Ισοδ. ακτίνα ≫ δ_target: έντονο skin effect — μόνο λεπτή επιφανειακή φλούδα συμμετέχει."}
         </p>
       </Panel>

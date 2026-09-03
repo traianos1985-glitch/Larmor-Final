@@ -194,23 +194,16 @@ export function findNearestHarmonic(
   if (f0 <= 0 || targetHz <= 0) return { n: 1, f: f0 }
   const n0 = Math.max(1, Math.round(targetHz / f0))
 
-  // Πλησιέστερη ΕΠΙΤΡΕΠΤΗ (εκπεμπόμενη) αρμονική στο n0. Η θεμελιώδης (n=1) υπάρχει
-  // πάντα σε κάθε πραγματική κυματομορφή, οπότε αν η κυματομορφή δεν επιτρέπει καμία
-  // κοντινή αρμονική (π.χ. ημίτονο → μόνο n=1, ενώ ο στόχος είναι εκατομμύρια αρμονικές
-  // πιο ψηλά) η ζώνη «πέφτει» στη θεμελιώδη ΑΝΤΙ να επιστρέφει μη-εκπεμπόμενη αρμονική.
-  const nearestAllowed = (): { n: number; f: number } => {
-    if (isAllowed(n0)) return { n: n0, f: f0 * n0 }
-    for (let dn = 1; dn <= 5000; dn++) {
-      if (n0 - dn >= 1 && isAllowed(n0 - dn)) return { n: n0 - dn, f: f0 * (n0 - dn) }
-      if (isAllowed(n0 + dn)) return { n: n0 + dn, f: f0 * (n0 + dn) }
-    }
-    return { n: 1, f: f0 }
-  }
-
   // Για την «2dec» κάθε συχνότητα ικανοποιεί το κριτήριο, οπότε αρκεί η πλησιέστερη
   // ΕΠΙΤΡΕΠΤΗ αρμονική στο n0 (π.χ. περιττή για τετράγωνο, μόνο n=1 για ημίτονο).
   if (criterion === "2dec") {
-    return nearestAllowed()
+    if (isAllowed(n0)) return { n: n0, f: f0 * n0 }
+    for (let dn = 1; dn <= 250; dn++) {
+      for (const n of [n0 + dn, n0 - dn]) {
+        if (n >= 1 && isAllowed(n)) return { n, f: f0 * n }
+      }
+    }
+    return { n: n0, f: f0 * n0 }
   }
 
   const WINDOW = 250
@@ -231,9 +224,7 @@ export function findNearestHarmonic(
     }
     if (bestN !== null && dn > 15) break
   }
-  // Fallback: αν καμία επιτρεπτή αρμονική δεν ικανοποιεί το κριτήριο στο παράθυρο,
-  // επιστρέφουμε την πλησιέστερη ΕΠΙΤΡΕΠΤΗ (τελικά τη θεμελιώδη) — ποτέ μη-εκπεμπόμενη.
-  return bestN !== null ? { n: bestN, f: f0 * bestN } : nearestAllowed()
+  return bestN !== null ? { n: bestN, f: f0 * bestN } : { n: n0, f: f0 * n0 }
 }
 
 /* ============================================================
@@ -1012,7 +1003,7 @@ export function computeMeasurementQuality(input: QualityInput): MeasurementQuali
    ΤΡΙΓΩΝΙΣΜΟΣ — Σύγκλιση πολλαπλών μετρήσεων
    Από 2-3+ θέσεις γεννήτριας, καθεμιά με μια διεύθυνση (διόπτευση)
    προς τον στόχο, υπολογίζεται το σημείο τομής των διευθύνσεων με
-   σταθμισμένη μέθοδο ελαχίστων τετραγώνων και εκτιμάται η «ζώνη
+   σταθμισμένη μέθοδο ελαχίστων τετραγώνων και εκτιμάται η «��ώνη
    αβεβαιότητας» (error ellipse 95%) γύρω από το εκτιμώμενο σημείο.
 
    Μέθοδος:
