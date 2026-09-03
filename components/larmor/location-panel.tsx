@@ -312,6 +312,13 @@ export function LocationPanel({
     setMineral(mineralResult)
     setSoilBusy(false)
 
+    // Πλήρως αυτόματο: ο τύπος εδάφους εφαρμόζεται αμέσως στους υπολογισμούς
+    // (skin depth section 3 + διάθλαση section 6) μόλις εντοπιστεί.
+    if (soilResult) {
+      onApplySoil(soilResult.soilTypeValue, soilResult.sec6SoilValue)
+      setSoilApplied(true)
+    }
+
     if (!soilResult && !mineralResult) {
       setStatus((s) => `${s} Ανάλυση εδάφους/ορυκτοποίησης μη διαθέσιμη για την περιοχή.`)
       setStatusTone("brass")
@@ -512,7 +519,9 @@ export function LocationPanel({
               }}
             >
               <Check className="size-4" />
-              {soilApplied ? "Ο τύπος εδάφους εφαρμόστηκε ✓" : "Εφαρμογή τύπου εδάφους στους υπολογισμούς"}
+              {soilApplied
+                ? "Εφαρμόστηκε αυτόματα ✓ — πάτα για εκ νέου εφαρμογή"
+                : "Εφαρμογή τύπου εδάφους στους υπολογισμούς"}
             </button>
           )}
         </div>
