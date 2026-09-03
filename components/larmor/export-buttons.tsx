@@ -30,6 +30,7 @@ type ExportState = {
   estimateDistanceKm: number
   estimateBearingDeg: number
   estimateConfidence: number
+  estimateQualityGrade: string
 }
 
 function download(filename: string, content: string, type: string) {
@@ -73,7 +74,7 @@ export function ExportButtons({ state }: { state: ExportState }) {
         transmitter_frequency_hz: state.generatorFrequency,
         electrodes: { material: "μπρούτζος", length_cm: state.rodLengthCm, spacing_cm: state.rodSpacingCm },
         observed_position: { lat: state.observedLat, lon: state.observedLon },
-        estimate: { distance_km: state.estimateDistanceKm, bearing_deg: state.estimateBearingDeg, confidence_percent: state.estimateConfidence },
+        estimate: { distance_km: state.estimateDistanceKm, bearing_deg: state.estimateBearingDeg, confidence_percent: state.estimateConfidence, quality_grade: state.estimateQualityGrade },
       },
     }
     download(`larmor-${matLabel}-${stamp}.json`, JSON.stringify(payload, null, 2), "application/json")
@@ -114,6 +115,13 @@ export function ExportButtons({ state }: { state: ExportState }) {
       "── ΣΤΟΧΟΣ ─────────────────────────────────",
       `Βάθος στόχου         : ${state.targetDepth} m`,
       `Ακτίνα στόχου        : ${state.rMm} mm`,
+      "",
+      "── ΠΕΙΡΑΜΑΤΙΚΗ ΕΚΤΙΜΗΣΗ ΘΕΣΗΣ ─────────────",
+      `Γεννήτρια            : ${state.generatorLat.toFixed(6)}°, ${state.generatorLon.toFixed(6)}°`,
+      `Παρατηρούμενο σημείο : ${state.observedLat.toFixed(6)}°, ${state.observedLon.toFixed(6)}°`,
+      `Απόσταση σημείων     : ${state.estimateDistanceKm.toFixed(3)} km`,
+      `Διόπτευση            : ${state.estimateBearingDeg.toFixed(1)}°`,
+      `Ποιότητα μέτρησης    : ${state.estimateConfidence.toFixed(0)}/100 (${state.estimateQualityGrade})`,
       "",
       "════════════════════════════════════════════",
       "Επιστημονική σημείωση: Η χρήση των συχνοτήτων",
