@@ -292,6 +292,81 @@ export function fresnelReflection(
   return Math.max(0, Math.min(1, cAbs2(gamma)))
 }
 
+/* ============================================================
+   ΟΡΥΚΤΟΠΟΙΗΣΗ ΕΔΑΦΟΥΣ — Ψευδο-συντονισμός μαγνητικών ορυκτών
+   ------------------------------------------------------------
+   Τα μαγνητικά ορυκτά του εδάφους (μαγνητίτης/μαιμαγκετίτης,
+   «hot rocks») έχουν μαγνητική επιδεκτικότητα χ (SI) που ανεβάζει
+   τη σχετική διαπερατότητα του εδάφους σε μr_soil = 1 + χ.
+   Αυτό δημιουργεί μια ΕΠΙΠΛΕΟΝ ανάκλαση στη διεπαφή αέρα→εδάφους
+   που ΜΙΜΕΙΤΑΙ σήμα στόχου — ψευδο-συντονισμός.
+
+   Απομονώνουμε ΜΟΝΟ τη μαγνητική συνιστώσα ως:
+     R_min = |Γ_air→soil(μr=1+χ)|² − |Γ_air→soil(μr=1)|²   (≥ 0)
+   δηλαδή πόση παραπανίσια ανάκλαση οφείλεται καθαρά στα μαγνητικά
+   ορυκτά. Όταν χ = 0 → R_min = 0 (μη μαγνητικό έδαφος).
+============================================================ */
+export interface MineralizationLevel {
+  value: string
+  label: string
+  /** ογκομετρική μαγνητική επιδεκτικότητα χ (SI) */
+  chi: number
+}
+export const MINERALIZATION_LEVELS: MineralizationLevel[] = [
+  { value: "0", label: "Καθόλου — μη μαγνητικό έδαφος (χ ≈ 0)", chi: 0 },
+  { value: "0.001", label: "Χαμηλή ορυκτοποίηση (χ ≈ 1×10⁻³ SI)", chi: 0.001 },
+  { value: "0.01", label: "Μέτρια ορυκτοποίηση (χ ≈ 1×10⁻² SI)", chi: 0.01 },
+  { value: "0.05", label: "Υψηλή — «hot rocks» / μαγνητίτης (χ ≈ 5×10⁻² SI)", chi: 0.05 },
+]
+
+/** Εγγενής εμπέδηση του αέρα (κενού) — πραγματικός αριθμός ≈ 376.73 Ω. */
+const ETA_AIR: Complex = { re: Math.sqrt(MU0 / EPSILON_0), im: 0 }
+
+/**
+ * Ένταση ψευδο-συντονισμού ορυκτοποίησης R_min ∈ [0,1]: η ΕΠΙΠΛΕΟΝ
+ * ανακλώμενη ισχύς στη διεπαφή αέρα→εδάφους που οφείλεται καθαρά στη
+ * μαγνητική επιδεκτικότητα χ των ορυκτών του εδάφους.
+ */
+export function mineralizationReflection(
+  soilSigma: number,
+  soilEpsR: number,
+  soilChi: number,
+  f: number,
+): number {
+  if (f <= 0 || soilChi <= 0) return 0
+  const etaMag = intrinsicImpedance(soilSigma, soilEpsR, 1 + soilChi, f)
+  const etaPlain = intrinsicImpedance(soilSigma, soilEpsR, 1, f)
+  const rMag = cAbs2(cDiv(cSub(etaMag, ETA_AIR), cAdd(etaMag, ETA_AIR)))
+  const rPlain = cAbs2(cDiv(cSub(etaPlain, ETA_AIR), cAdd(etaPlain, ETA_AIR)))
+  return Math.max(0, Math.min(1, rMag - rPlain))
+}
+
+/**
+ * Αντίθεση στόχου–ορυκτοποίησης σε μία συχνότητα εκπομπής f.
+ * targetResp = |Γ|²·(1 − e^(−t/δ_metal))  (χρήσιμο σήμα στόχου)
+ * mineralResp = R_min                        (ψευδο-συντονισμός εδάφους)
+ * contrast = targetResp / (targetResp + mineralResp) ∈ [0,1]
+ *   → 1 = καθαρός στόχος, 0 = πνιγμένος στην ορυκτοποίηση.
+ */
+export function mineralizationContrast(
+  f: number,
+  mat: Material,
+  thicknessMm: number,
+  soilSigma: number,
+  soilEpsR: number,
+  soilChi: number,
+): { targetResp: number; mineralResp: number; contrast: number } {
+  if (f <= 0) return { targetResp: 0, mineralResp: 0, contrast: 0 }
+  const t = thicknessMm / 1000
+  const dMetal = skinDepth(f, mat.sigma, mat.muR)
+  const metalResp = isFinite(dMetal) && dMetal > 0 && t > 0 ? 1 - Math.exp(-t / dMetal) : 0
+  const targetResp = fresnelReflection(mat.sigma, mat.muR, soilSigma, soilEpsR, f) * metalResp
+  const mineralResp = mineralizationReflection(soilSigma, soilEpsR, soilChi, f)
+  const denom = targetResp + mineralResp
+  const contrast = denom > 0 ? targetResp / denom : soilChi > 0 ? 0 : 1
+  return { targetResp, mineralResp, contrast }
+}
+
 /**
  * Βέλτιστη αρμονική: max δ_soil × R_eff, όπου
  * R_eff = |Γ|²·(1 − e^(−t/δ_metal)) — συντελεστής Fresnel (πόσο ανακλάται
@@ -703,7 +778,7 @@ export function computeMeasurementQuality(input: QualityInput): MeasurementQuali
     })
   }
 
-  // 2) Εγκυρότητα μοντέλου διάθλασης (καλός αγωγός/διηλεκτρικό: tan δ)
+  // 2) Εγκυρότητα μοντέλου διάθλασης (καλός αγωγός/διηλεκτρ��κό: tan δ)
   {
     const lt = input.lossTangent
     let score = 0.5

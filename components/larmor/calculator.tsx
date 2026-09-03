@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import {
   MATERIALS,
   SOIL_TYPES,
+  MINERALIZATION_LEVELS,
+  mineralizationContrast,
   REFRACTION_SOILS,
   PRESETS,
   getPreset,
@@ -77,6 +79,9 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
   const [soilType, setSoilType] = useState("0.01")
   const [sigmaCustom, setSigmaCustom] = useState(0.001)
   const [targetDepth, setTargetDepth] = useState(1)
+  // Ορυκτοποίηση εδάφους (μαγνητικά ορυκτά) — τροφοδοτεί το κριτήριο «καθαρότητας»
+  // που ξεχωρίζει τον στόχο από τον ψευδο-συντονισμό στις ομαδοποιημένες ζώνες.
+  const [mineralization, setMineralization] = useState("0")
 
   // Refraction (section 6) — το βάθος d δεν είναι πλέον ξεχωριστό state·
   // χρησιμοποιεί το κοινό targetDepth ώστε να μη δίνεται δύο φορές.
@@ -124,6 +129,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
         if (Number.isFinite(s.unitMultiplier)) setUnitMultiplier(s.unitMultiplier)
         if (typeof s.soilType === "string") setSoilType(s.soilType)
         if (Number.isFinite(s.sigmaCustom)) setSigmaCustom(s.sigmaCustom)
+        if (typeof s.mineralization === "string") setMineralization(s.mineralization)
         if (Number.isFinite(s.targetDepth)) setTargetDepth(s.targetDepth)
         else if (Number.isFinite(s.sec6Depth)) setTargetDepth(s.sec6Depth)
         if (typeof s.sec6Soil === "string") setSec6Soil(s.sec6Soil)
@@ -152,7 +158,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
         JSON.stringify({
           lat, lon, elev, date, bfield, bSource, geomag,
           materialId, maxharm, selectedN, waveform, unitMultiplier,
-          soilType, sigmaCustom, targetDepth,
+          soilType, sigmaCustom, mineralization, targetDepth,
           sec6Soil, sec6Theta, sec6H, dipoleAxis,
           generatorLat, generatorLon, generatorFrequency, generatorBandLabel,
           observedLat, observedLon, activePreset,
@@ -180,7 +186,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
     setActivePreset(id)
   }
 
-  // Ένα-πάτημα GPS για το ��αρατηρούμενο (τελικό) σημείο — γεμίζει lat/lon αυτόματα.
+  // Ένα-πάτημα GPS για το ����αρατηρούμενο (τελικό) σημείο — γεμίζει lat/lon αυτόματα.
   function useCurrentTargetLocation() {
     if (typeof navigator === "undefined" || !navigator.geolocation) {
       setGpsStatus("Το GPS δεν υποστηρίζεται σε αυτή τη συσκευή.")
@@ -203,6 +209,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
 
   const mat = getMaterial(materialId)
   const sigmaSoil = soilType === "custom" ? sigmaCustom : Number.parseFloat(soilType)
+  const soilChi = Number.parseFloat(mineralization) || 0
   const f0 = useMemo(() => larmorHz(mat.gamma, bfield), [mat.gamma, bfield])
   const rMm = useMemo(() => effectiveRadiusMm(mat, unitMultiplier), [mat, unitMultiplier])
 
@@ -239,14 +246,20 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
           : findNearestHarmonic(f0, band.target as number, band.criterion, allowed)
       if (!result) return null
       const f = result.f
+      const mc = mineralizationContrast(f, mat, rMm, sigmaSoil, 10, soilChi)
+      const dSoil = skinDepth(f, sigmaSoil)
       return {
         label: band.label,
         criterion: band.criterion,
         n: result.n,
         f,
         deltaF: band.target ? f - band.target : null,
-        dSoil: skinDepth(f, sigmaSoil),
+        dSoil,
         dMetal: skinDepth(f, mat.sigma, mat.muR),
+        contrast: mc.contrast,
+        mineralResp: mc.mineralResp,
+        // Σκορ σύστασης: αντίθεση στόχου × διείσδυση εδάφους (ώστε να φτάνει στον στόχο).
+        cleanScore: mc.contrast * (isFinite(dSoil) ? dSoil : 0),
       }
     }).filter(Boolean) as {
       label: string
@@ -256,8 +269,11 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
       deltaF: number | null
       dSoil: number
       dMetal: number
+      contrast: number
+      mineralResp: number
+      cleanScore: number
     }[]
-  }, [f0, sigmaSoil, mat, rMm, waveform])
+  }, [f0, sigmaSoil, soilChi, mat, rMm, waveform])
 
   // ── Επιλεγμένη συχνότητα εκπομπής (από τις ομαδοποιημένες ζώνες, section 2β) ──
   // Αυτή είναι η ΜΙΑ συχνότητα που τροφοδοτεί όλους τους παρακάτω υπολογισμούς:
@@ -271,6 +287,14 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
       bands[0]
     )
   }, [bands, generatorBandLabel])
+  // ── Σύσταση καθαρότερης ζώνης έναντι ορυκτοποίησης (Επιλογή Β) ──
+  // Επιλέγει, ΜΕΣΑ από τις ίδιες ομαδοποιημένες αρμονικές, εκείνη με το
+  // μεγαλύτερο cleanScore (αντίθεση στόχου × διείσδυση). Ενεργό μόνο όταν
+  // υπάρχει ορυκτοποίηση (χ > 0)· αλλιώς δεν έχει νόημα σύσταση.
+  const cleanestBand = useMemo(() => {
+    if (!bands.length || soilChi <= 0) return null
+    return bands.reduce((best, b) => (b.cleanScore > best.cleanScore ? b : best), bands[0])
+  }, [bands, soilChi])
   const autoGeneratorFrequency = selectedBand ? selectedBand.f : f0
   const effectiveGeneratorFrequency = generatorFrequency > 0 ? generatorFrequency : autoGeneratorFrequency
   const generatorFrequencyIsAuto = !(generatorFrequency > 0)
@@ -793,12 +817,17 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
                 <th className="border-b border-panel-line px-2 py-2">Δf</th>
                 <th className="border-b border-panel-line px-2 py-2">δ έδαφος</th>
                 <th className="border-b border-panel-line px-2 py-2">δ μέταλλο</th>
+                {soilChi > 0 && <th className="border-b border-panel-line px-2 py-2">Καθαρότητα</th>}
               </tr>
             </thead>
             <tbody>
               {bands.map((b) => {
                 const isOpt = b.criterion === "optimal"
                 const isSelected = generatorFrequencyIsAuto && selectedBand?.label === b.label
+                const isCleanest = cleanestBand?.label === b.label
+                const cleanPct = Math.round(b.contrast * 100)
+                const cleanTone =
+                  b.contrast >= 0.66 ? "text-phosphor" : b.contrast >= 0.33 ? "text-brass" : "text-destructive"
                 return (
                   <tr
                     key={b.label}
@@ -815,6 +844,11 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
                     <td className={"px-2 py-2 " + (isOpt ? "text-brass" : "")}>
                       {isSelected ? "▸ " : ""}
                       {b.label}
+                      {isCleanest && (
+                        <span className="ml-1.5 rounded-sm border border-phosphor-dim px-1 py-0.5 text-[0.6rem] text-phosphor">
+                          ✓ καθαρή
+                        </span>
+                      )}
                     </td>
                     <td className="px-2 py-2 text-muted-foreground">n={b.n.toLocaleString("el-GR")}</td>
                     <td className="break-all px-2 py-2 text-phosphor">{fmtBandFrequency(b.f, b.criterion)}</td>
@@ -825,15 +859,25 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
                     </td>
                     <td className="px-2 py-2">{fmtDelta(b.dSoil)}</td>
                     <td className="px-2 py-2">{fmtDelta(b.dMetal)}</td>
+                    {soilChi > 0 && <td className={"px-2 py-2 " + cleanTone}>{cleanPct}%</td>}
                   </tr>
                 )
               })}
             </tbody>
           </table>
         </div>
+        {soilChi > 0 && cleanestBand && (
+          <p className="mt-3 rounded-sm border border-phosphor-dim/50 bg-secondary/30 px-3 py-2.5 font-mono text-[0.72rem] leading-relaxed text-foreground">
+            ✓ Συνιστώμενη έναντι ορυκτοποίησης: <span className="text-phosphor">{cleanestBand.label}</span>{" "}
+            (n={cleanestBand.n.toLocaleString("el-GR")}, {fmtHzOnly(cleanestBand.f)}) — καθαρότητα{" "}
+            <span className="text-phosphor">{Math.round(cleanestBand.contrast * 100)}%</span>. Αυτή η αρμονική δίνει
+            τη μεγαλύτερη αντίθεση στόχου έναντι του ψευδο-συντονισμού των μαγνητικών ορυκτών, διατηρώντας επαρκή διείσδυση.
+          </p>
+        )}
         <p className="mt-3 rounded-sm border border-brass-dim/50 bg-secondary/30 px-3 py-2.5 font-mono text-[0.7rem] leading-relaxed text-muted-foreground">
           ★ Βέλτιστος: Μεγιστοποιεί το δ_soil × (1 − e^(−t/δ_metal)). Το βέλτιστο f βρίσκεται εκεί όπου δ_metal ≈ ισοδύναμη
-          ακτίνα του στόχου. ⚠ Στα 1/3/6 GHz μόνο τα πρώτα ~5-6 δεκαδικά είναι αξιόπιστα (όριο IEEE-754).
+          ακτίνα του στόχου. {soilChi > 0 && "Η στήλη «Καθαρότητα» = αντίθεση στόχου/ορυκτοποίησης· 100% = καθαρός στόχος. "}⚠ Στα
+          1/3/6 GHz μόνο τα πρώτα ~5-6 δεκαδικά είναι αξιόπιστα (όριο IEEE-754).
         </p>
       </Panel>
 
@@ -867,6 +911,18 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
               />
             </Field>
           )}
+          <Field label="Ορυκτοποίηση εδάφους (μαγνητικά ορυκτά)" htmlFor="mineralization">
+            <select id="mineralization" className={selectClass} value={mineralization} onChange={(e) => setMineralization(e.target.value)}>
+              {MINERALIZATION_LEVELS.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+            <span className="mt-1 block font-mono text-[0.6rem] text-phosphor">
+              καθορίζει τη σύσταση «καθαρότερης αρμονικής» στη §2β
+            </span>
+          </Field>
           <Field label="Εκτιμώμενο βάθος στόχου (m)" htmlFor="target-depth" warn={validateDepth(targetDepth)}>
             <input
               id="target-depth"
