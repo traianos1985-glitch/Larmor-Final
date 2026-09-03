@@ -332,7 +332,7 @@ export function findOptimalCombo(
     const metalResp = isFinite(dMetal) && dMetal > 0 && t > 0 ? 1 - Math.exp(-t / dMetal) : 0
     // Fresnel: πόσο ανακλάται στη διεπαφή εδάφους→μετάλλου (ισχύς).
     const reflR = fresnelReflection(mat.sigma, mat.muR, sigmaSoil, soilEpsR, f)
-    // Πλήρης ανακλαστική απόκριση = αδιαφάνεια × ανακλαστικότητα Fresnel.
+    // Πλή��ης ανακλαστική απόκριση = αδιαφάνεια × ανακλαστικότητα Fresnel.
     const score = dSoil * metalResp * reflR
     if (score > bestScore) {
       bestScore = score
@@ -632,7 +632,7 @@ export const REFRACTION_SOILS = [
      αγκυρωμένο στους διακριτούς τύπους εδάφους της εφαρμογής.
 
    Οι τιμές «κουμπώνουν» στους υπάρχοντες τύπους (SOIL_TYPES /
-   REFRACTION_SOILS) ώστε να τροφοδοτούν απευθείας τα ίδια selects.
+   REFRACTION_SOILS) ώστε να τροφοδο��ούν απευθείας τα ίδια selects.
 ============================================================ */
 export function soilMoisturePermittivity(vwc: number): number {
   const t = Math.max(0, Math.min(0.6, vwc))
@@ -1003,7 +1003,7 @@ export function computeMeasurementQuality(input: QualityInput): MeasurementQuali
    ΤΡΙΓΩΝΙΣΜΟΣ — Σύγκλιση πολλαπλών μετρήσεων
    Από 2-3+ θέσεις γεννήτριας, καθεμιά με μια διεύθυνση (διόπτευση)
    προς τον στόχο, υπολογίζεται το σημείο τομής των διευθύνσεων με
-   σταθμισμένη μέθοδο ελαχίστων τετραγώνων και εκτιμάται η «ζώνη
+   σταθμισμένη μέθοδο ελαχίστων τετραγώνων και εκτιμάται η «��ώνη
    αβεβαιότητας» (error ellipse 95%) γύρω από το εκτιμώμενο σημείο.
 
    Μέθοδος:

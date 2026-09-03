@@ -334,7 +334,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
   const chartData = harmonics.map((h) => ({ n: h.n, soil: h.dSoil, metal: h.dMetal }))
 
   // Section 6 refraction — η κύρια γραμμή υπολογίζεται στη συχνότητα εκπομπής (fSelected).
-  // Ο πίνακας δείχνει και τις υπόλοιπες ομαδ��ποιημένες ζώνες για σύγκριση.
+  // Ο πίνακας δείχνει και τις υπόλοιπες ομαδ������ποιημένες ζώνες για σύγκριση.
   const refraction = useMemo(() => {
     const [epsStr, sigStr] = sec6Soil.split("|")
     const epsilon_r = Number.parseFloat(epsStr)
@@ -527,7 +527,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
 
       {tab === "mapping" && (
         <>
-      <Panel step="7" title="Τελική χαρτογράφηση & πειραματική εκτίμηση θέσης" desc="Αφού επιλέξεις υλικό, πεδίο και συχνότητα, κατέγραψε τη γεννήτρια και το σημείο που δείχνουν οι βέργες. Η απόσταση και η διόπτευση είναι πειραματικές εκτιμήσεις.">
+      <Panel step="7" title="Τελική χαρτογράφηση & πειραματική εκτίμηση θέσης" desc="Αφού επιλέξεις υλικό, πεδίο και συχνότητα, κ��τέ��ραψε τη γεννήτρια και το σημείο που δείχνουν οι βέργες. Η απόσταση και η διόπτευση είναι πειραματικές εκτιμήσεις.">
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Γεννήτρια · πλάτος" htmlFor="generator-lat" warn={validateLat(generatorLat)}><input id="generator-lat" type="number" step="0.000001" min={-90} max={90} className={inputClass} value={generatorLat} onChange={(e) => applyGeneratorLat(Number.parseFloat(e.target.value) || 0)} /></Field>
@@ -1028,7 +1028,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
             : metalRatio < 0.5
               ? "Ισοδ. ακτίνα ≪ δ_target: ολόκληρος ο όγκος συμμετέχει (πλήρης διείσδυση)."
               : metalRatio < 3
-                ? "Ισοδ. ακτίνα ≈ δ_target: μερική διείσδυση — απόκριση κυρίως από το εξωτερικό στρώμα."
+                ? "Ισοδ. ακτίνα ≈ ��_target: μερική διείσδυση — απόκριση κυρίως από το εξωτερικό στρώμα."
                 : "Ισοδ. ακτίνα ≫ δ_target: έντονο skin effect — μόνο λεπτή επιφανειακή φλούδα συμμετέχει."}
         </p>
       </Panel>
