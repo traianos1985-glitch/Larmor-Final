@@ -31,6 +31,9 @@ import {
   fresnelReflection,
   effectiveReflectionDepthM,
   computeDriftDirection,
+  haloMetrics,
+  bearingBetween,
+  destinationPoint,
   distanceAndBearingKm,
   computeDipoleField,
   computeDipoleInclination,
@@ -53,6 +56,7 @@ import { ExportButtons } from "./export-buttons"
 import { TriangulationPanel } from "./triangulation-panel"
 import { SuspectSitesPanel } from "./suspect-sites-panel"
 import { CachingToolsPanel } from "./caching-tools"
+import { HaloResolutionPanel } from "./halo-resolution"
 
 export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
   // Location / field
@@ -180,7 +184,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
     setActivePreset(id)
   }
 
-  // Ένα-πάτημα GPS για το ��αρατηρούμενο (τελικό) σημείο — γεμίζει lat/lon αυτόματα.
+  // Ένα-πάτημα GPS για το ����αρατηρούμενο (τελικό) σημείο — γεμίζει lat/lon αυτόματα.
   function useCurrentTargetLocation() {
     if (typeof navigator === "undefined" || !navigator.geolocation) {
       setGpsStatus("Το GPS δεν υποστηρίζεται σε αυτή τη συσκευή.")
@@ -338,6 +342,74 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
   )
 
   const endpoint = useMemo(() => distanceAndBearingKm(generatorLat, generatorLon, observedLat, observedLon), [generatorLat, generatorLon, observedLat, observedLon])
+
+  // ── §7β Ανάλυση halo: πλευρική ακτίνα (ζώνη Fresnel) & επιστρεφόμενο σήμα ανά ζώνη ──
+  // Επιλέγει την υψηλότερη αρμονική που ακόμα επιστρέφει επαρκές σήμα → ελάχιστο halo,
+  // και διορθώνει τη θέση από την άκρη του halo προς το κέντρο (τον στόχο).
+  const HALO_SIGNAL_FLOOR = 0.1
+  const halo = useMemo(() => {
+    const [epsStr, sigStr] = sec6Soil.split("|")
+    const epsilon_r = Number.parseFloat(epsStr)
+    const sigma = Number.parseFloat(sigStr)
+
+    const raw = bands.map((b) => {
+      const m = haloMetrics(b.f, epsilon_r, sigma, mat, rMm, targetDepth)
+      return { label: b.label, n: b.n, f: b.f, ...m }
+    })
+    const peak = raw.reduce((mx, r) => Math.max(mx, r.signalRaw), 0)
+    const withRel = raw.map((r) => ({
+      ...r,
+      signalRel: peak > 0 ? r.signalRaw / peak : 0,
+      eligible: peak > 0 && r.signalRaw / peak >= HALO_SIGNAL_FLOOR && isFinite(r.rFresnelM),
+    }))
+    const eligible = withRel.filter((r) => r.eligible)
+    const pool = eligible.length ? eligible : withRel
+    const best =
+      pool.reduce<(typeof withRel)[number] | null>(
+        (b, r) => (!b || r.rFresnelM < b.rFresnelM ? r : b),
+        null,
+      ) ?? null
+
+    const selMetrics = haloMetrics(fSelected, epsilon_r, sigma, mat, rMm, targetDepth)
+    return { rows: withRel, best, peak, epsilon_r, sigma, selected: { f: fSelected, n: selectedBand?.n ?? 1, ...selMetrics } }
+  }, [bands, sec6Soil, mat, rMm, targetDepth, fSelected, selectedBand])
+
+  // Feature 3 — Διόρθωση θέσης halo→στόχου: μετακίνηση του τελικού σημείου κατά r_F
+  // προς τη γεννήτρια (πηγή). Χρειάζεται κατεύθυνση, άρα δύο διακριτά σημεία.
+  const haloCorrection = useMemo(() => {
+    const hasDirection = endpoint.distanceKm > 1e-7
+    if (!hasDirection) return { hasDirection: false as const, corrected: null, correctedBest: null, backBearing: 0 }
+    const backBearing = bearingBetween(observedLat, observedLon, generatorLat, generatorLon)
+    const shiftM = isFinite(halo.selected.rFresnelM) ? halo.selected.rFresnelM : 0
+    const [clat, clon] = destinationPoint(observedLat, observedLon, backBearing, shiftM / 1000)
+    let correctedBest: { lat: number; lon: number; shiftM: number } | null = null
+    if (halo.best && isFinite(halo.best.rFresnelM)) {
+      const [blat, blon] = destinationPoint(observedLat, observedLon, backBearing, halo.best.rFresnelM / 1000)
+      correctedBest = { lat: blat, lon: blon, shiftM: halo.best.rFresnelM }
+    }
+    return {
+      hasDirection: true as const,
+      corrected: { lat: clat, lon: clon, shiftM, bearingDeg: backBearing },
+      correctedBest,
+      backBearing,
+    }
+  }, [endpoint.distanceKm, observedLat, observedLon, generatorLat, generatorLon, halo.selected.rFresnelM, halo.best])
+
+  const haloRows = useMemo(
+    () =>
+      halo.rows.map((r) => ({
+        label: r.label,
+        n: r.n,
+        f: r.f,
+        rFresnelM: r.rFresnelM,
+        signalRel: r.signalRel,
+        rEff: r.rEff,
+        eligible: r.eligible,
+        isBest: halo.best?.label === r.label,
+        isSelected: !generatorFrequencyIsAuto ? false : selectedBand?.label === r.label,
+      })),
+    [halo.rows, halo.best, selectedBand, generatorFrequencyIsAuto],
+  )
 
   // ── Δείκτες ποιότητας μέτρησης (αντικαθιστούν το παλιό ευριστικό confidence) ──
   // Σύνθετος, διαφανής δείκτης από φυσικά θεμελιωμένους παράγοντες: πηγή πεδίου B,
@@ -588,6 +660,18 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
           </p>
         </div>
       </Panel>
+
+      <HaloResolutionPanel
+        rows={haloRows}
+        selected={halo.selected}
+        best={halo.best ? { ...haloRows.find((r) => r.label === halo.best!.label)! } : null}
+        floor={HALO_SIGNAL_FLOOR}
+        materialName={mat.name}
+        depthM={targetDepth}
+        corrected={haloCorrection.corrected}
+        correctedBest={haloCorrection.correctedBest}
+        hasDirection={haloCorrection.hasDirection}
+      />
 
       <TriangulationPanel
         currentGenerator={{ lat: generatorLat, lon: generatorLon }}

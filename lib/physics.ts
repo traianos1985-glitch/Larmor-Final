@@ -474,6 +474,71 @@ export function effectiveReflectionDepthM(
   return { depth: Math.max(0, centerDepthM - shift), shift }
 }
 
+/* ------------------------------------------------------------
+   HALO RESOLUTION — Πλευρική ανάλυση («ακτίνα halo») ανά συχνότητα
+   ------------------------------------------------------------
+   Το φαινόμενο που «ξεγελά» τον χειριστή των βεργών: γύρω από τον στόχο
+   σχηματίζεται μια ζώνη όπου το διεγερμένο πεδίο είναι ακόμη αρκετά ισχυρό
+   ώστε να αντιδράσουν οι βέργες — το «halo». Το πλευρικό εύρος αυτής της
+   ζώνης ισούται κατά προσέγγιση με την ΠΡΩΤΗ ΖΩΝΗ FRESNEL:
+
+     r_F = √( λ_soil · d_eff )              (λ_soil = v_soil / f = c / (n_r · f))
+
+   • Χαμηλή συχνότητα → μεγάλο λ → μεγάλο, θαμπό halo (αλλά βαθιά διείσδυση).
+   • Υψηλή συχνότητα → μικρό λ → σφιχτό halo, καλύτερη πλευρική ευκρίνεια
+     (αλλά ασθενέστερο επιστρεφόμενο σήμα λόγω εξασθένησης εδάφους).
+
+   Στόχος: η ΥΨΗΛΟΤΕΡΗ συχνότητα που ΑΚΟΜΑ επιστρέφει επαρκές σήμα → ελάχιστο
+   r_F → ο χειριστής πλησιάζει τον πραγματικό στόχο, όχι την άκρη του halo.
+
+   Επιστρεφόμενο σήμα (round-trip, plane-wave approx):
+     S = e^(−2·α·d_eff) · R_eff
+   όπου α η σταθερά εξασθένησης του εδάφους και R_eff = |Γ|²·(1−e^(−t/δ_metal))
+   η ανακλαστική απόκριση του στόχου (ήδη οριζόμενη στο §6).
+
+   ΣΗΜΕΙΩΣΗ: ο φέρων δηλώνεται ΧΕΙΡΟΚΙΝΗΤΑ στη γεννήτρια με πλήρες πλάτος
+   (π.χ. 0 dBm), άρα ΔΕΝ εφαρμόζεται βάρος αρμονικής 1/n — το σήμα που φτάνει
+   τον στόχο εξαρτάται μόνο από την εξασθένηση εδάφους και την ανακλαστικότητα.
+   Ποιες συχνότητες είναι διαθέσιμες ως αρμονικές έχει ήδη φιλτραριστεί ανάντη
+   (μόνο περιττά n για τετράγωνο) κατά τη δημιουργία των ζωνών.
+*/
+export interface HaloMetrics {
+  /** πλευρική ακτίνα halo ≈ πρώτη ζώνη Fresnel (m) */
+  rFresnelM: number
+  /** μη κανονικοποιημένο επιστρεφόμενο σήμα (round-trip) */
+  signalRaw: number
+  /** ενεργό βάθος ανάκλασης (m) */
+  dEffM: number
+  /** ανακλαστική απόκριση R_eff ∈ [0,1] */
+  rEff: number
+  /** μήκος κύματος στο έδαφος (m) */
+  lambdaM: number
+}
+
+export function haloMetrics(
+  f: number,
+  epsilonR: number,
+  sigma: number,
+  mat: Material,
+  radiusMm: number,
+  depthM: number,
+): HaloMetrics {
+  if (!(f > 0)) return { rFresnelM: Number.POSITIVE_INFINITY, signalRaw: 0, dEffM: depthM, rEff: 0, lambdaM: Number.POSITIVE_INFINITY }
+  const medium = computeComplexN(epsilonR, sigma, f)
+  const vSoil = C / medium.n_r
+  const lambda = vSoil / f
+  const deltaMetal = skinDepth(f, mat.sigma, mat.muR)
+  const metalResp = metalSkinResponse(radiusMm, deltaMetal)
+  const fresnelR = fresnelReflection(mat.sigma, mat.muR, sigma, epsilonR, f)
+  const rEff = fresnelR * metalResp
+  const { depth: dEff } = effectiveReflectionDepthM(depthM, radiusMm, metalResp)
+  const rFresnel = Math.sqrt(Math.max(0, lambda * dEff))
+  // Πλήρες πλάτος φέροντος (χειροκίνητη ρύθμιση): σήμα = round-trip εξασθένηση × R_eff.
+  const roundTrip = Math.exp(-medium.alpha * 2 * dEff)
+  const signalRaw = roundTrip * rEff
+  return { rFresnelM: rFresnel, signalRaw, dEffM: dEff, rEff, lambdaM: lambda }
+}
+
 export function computeSnell(n_r: number, theta1_deg: number) {
   const theta1 = (theta1_deg * Math.PI) / 180
   const theta_c = Math.asin(Math.min(1, 1 / n_r))
@@ -703,7 +768,7 @@ export function computeMeasurementQuality(input: QualityInput): MeasurementQuali
     })
   }
 
-  // 2) Εγκυρότητα μοντέλου διάθλασης (καλός αγωγός/διηλεκτρικό: tan δ)
+  // 2) Εγκυρότητα μοντέλου διάθλασης (καλός αγωγός/διηλεκτρ��κό: tan δ)
   {
     const lt = input.lossTangent
     let score = 0.5
