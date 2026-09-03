@@ -194,16 +194,23 @@ export function findNearestHarmonic(
   if (f0 <= 0 || targetHz <= 0) return { n: 1, f: f0 }
   const n0 = Math.max(1, Math.round(targetHz / f0))
 
+  // Πλησιέστερη ΕΠΙΤΡΕΠΤΗ (εκπεμπόμενη) αρμονική στο n0. Η θεμελιώδης (n=1) υπάρχει
+  // πάντα σε κάθε πραγματική κυματομορφή, οπότε αν η κυματομορφή δεν επιτρέπει καμία
+  // κοντινή αρμονική (π.χ. ημίτονο → μόνο n=1, ενώ ο στόχος είναι εκατομμύρια αρμονικές
+  // πιο ψηλά) η ζώνη «πέφτει» στη θεμελιώδη ΑΝΤΙ να επιστρέφει μη-εκπεμπόμενη αρμονική.
+  const nearestAllowed = (): { n: number; f: number } => {
+    if (isAllowed(n0)) return { n: n0, f: f0 * n0 }
+    for (let dn = 1; dn <= 5000; dn++) {
+      if (n0 - dn >= 1 && isAllowed(n0 - dn)) return { n: n0 - dn, f: f0 * (n0 - dn) }
+      if (isAllowed(n0 + dn)) return { n: n0 + dn, f: f0 * (n0 + dn) }
+    }
+    return { n: 1, f: f0 }
+  }
+
   // Για την «2dec» κάθε συχνότητα ικανοποιεί το κριτήριο, οπότε αρκεί η πλησιέστερη
   // ΕΠΙΤΡΕΠΤΗ αρμονική στο n0 (π.χ. περιττή για τετράγωνο, μόνο n=1 για ημίτονο).
   if (criterion === "2dec") {
-    if (isAllowed(n0)) return { n: n0, f: f0 * n0 }
-    for (let dn = 1; dn <= 250; dn++) {
-      for (const n of [n0 + dn, n0 - dn]) {
-        if (n >= 1 && isAllowed(n)) return { n, f: f0 * n }
-      }
-    }
-    return { n: n0, f: f0 * n0 }
+    return nearestAllowed()
   }
 
   const WINDOW = 250
@@ -224,7 +231,9 @@ export function findNearestHarmonic(
     }
     if (bestN !== null && dn > 15) break
   }
-  return bestN !== null ? { n: bestN, f: f0 * bestN } : { n: n0, f: f0 * n0 }
+  // Fallback: αν καμία επιτρεπτή αρμονική δεν ικανοποιεί το κριτήριο στο παράθυρο,
+  // επιστρέφουμε την πλησιέστερη ΕΠΙΤΡΕΠΤΗ (τελικά τη θεμελιώδη) — ποτέ μη-εκπεμπόμενη.
+  return bestN !== null ? { n: bestN, f: f0 * bestN } : nearestAllowed()
 }
 
 /* ============================================================
@@ -332,7 +341,7 @@ export function findOptimalCombo(
     const metalResp = isFinite(dMetal) && dMetal > 0 && t > 0 ? 1 - Math.exp(-t / dMetal) : 0
     // Fresnel: πόσο ανακλάται στη διεπαφή εδάφους→μετάλλου (ισχύς).
     const reflR = fresnelReflection(mat.sigma, mat.muR, sigmaSoil, soilEpsR, f)
-    // Πλήρης ανακλαστική απόκριση = αδιαφάνεια × ανακλαστικότητα Fresnel.
+    // Πλή��ης ανακλαστική απόκριση = αδιαφάνεια × ανακλαστικότητα Fresnel.
     const score = dSoil * metalResp * reflR
     if (score > bestScore) {
       bestScore = score
@@ -632,7 +641,7 @@ export const REFRACTION_SOILS = [
      αγκυρωμένο στους διακριτούς τύπους εδάφους της εφαρμογής.
 
    Οι τιμές «κουμπώνουν» στους υπάρχοντες τύπους (SOIL_TYPES /
-   REFRACTION_SOILS) ώστε να τροφοδοτούν απευθείας τα ίδια selects.
+   REFRACTION_SOILS) ώστε να τροφοδο��ούν απευθείας τα ίδια selects.
 ============================================================ */
 export function soilMoisturePermittivity(vwc: number): number {
   const t = Math.max(0, Math.min(0.6, vwc))
