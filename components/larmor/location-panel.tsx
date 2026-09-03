@@ -2,9 +2,23 @@
 
 import { useState } from "react"
 import dynamic from "next/dynamic"
-import { MapPin, Radio, Calculator, Crosshair } from "lucide-react"
+import { MapPin, Radio, Calculator, Crosshair, Mountain } from "lucide-react"
 import { Panel, Field, Readout, inputClass, buttonClass } from "./primitives"
 import { computeDipoleField, computeDipoleInclination } from "@/lib/physics"
+import {
+  fetchSoilMoisture,
+  fetchMagneticAnomaly,
+  suggestSoilFromMoisture,
+  suggestRefractionSoilFromMoisture,
+  mineralizationTier,
+  type SoilMoistureResult,
+  type MagneticAnomalyResult,
+} from "@/lib/geo-soil"
+
+export interface GeoSoilResult {
+  moisture: SoilMoistureResult | null
+  anomaly: MagneticAnomalyResult | null
+}
 
 const MapPicker = dynamic(() => import("./map-picker"), {
   ssr: false,
@@ -42,6 +56,8 @@ export function LocationPanel({
   setDate,
   onBResult,
   onGeomag,
+  onSoilSuggest,
+  onGeoSoil,
   generatorLat,
   generatorLon,
   observedLat,
@@ -237,7 +253,7 @@ export function LocationPanel({
       D: 4.2, I: computeDipoleInclination(latArg, lonArg), F: uT, H: uT * 0.83, X: uT * 0.82, Y: uT * 0.07, Z: uT * 0.56,
       uncertainty: null, secularVariation: { D: null, I: null, F: null }, source: "Offline dipole (D=default, I≈dipole)",
     })
-    setStatus("Εκτίμηση από offline dipole — λιγότερο ακριβές από WMM.")
+    setStatus("Εκτίμηση από offline dipole — λιγότερο ακριβ��ς από WMM.")
     setStatusTone("brass")
   }
 
