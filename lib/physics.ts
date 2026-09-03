@@ -128,7 +128,36 @@ export interface BandDef {
   criterion: Criterion
 }
 
-export const BANDS: BandDef[] = [
+/* ============================================================
+   ΤΥΠΟΣ ΕΚΠΟΜΠΗΣ ΓΕΝΝΗΤΡΙΑΣ (Waveform)
+   Δύο πραγματικές γεννήτριες:
+   • Ημίτονο (sine): καθαρός τόνος, οροφή 60 MHz.
+   • Τετράγωνο (square): φάσμα Fourier με ΜΟΝΟ περιττές αρμονικές
+     (n = 1, 3, 5, …) και σχετικό πλάτος ~1/n· οροφή 8 GHz.
+============================================================ */
+export type Waveform = "sine" | "square"
+
+/** Ανώτατη συχνότητα εκπομπής ανά γεννήτρια (φυσικό όριο υλικού). */
+export const SINE_MAX_HZ = 60e6 // 60 MHz — γεννήτρια ημιτόνου
+export const SQUARE_MAX_HZ = 8e9 // 8 GHz — γεννήτρια τετραγώνου
+/** Στόχος συντονισμού καθαρού τόνου για το ημίτονο. */
+export const SINE_TARGET_HZ = 55e6 // 55 MHz
+
+export function waveformMaxHz(w: Waveform): number {
+  return w === "sine" ? SINE_MAX_HZ : SQUARE_MAX_HZ
+}
+
+/**
+ * Σχετικό πλάτος της n-οστής αρμονικής ως προς τη θεμελιώδη (=1).
+ * • Ημίτονο: καθαρός τόνος → πλάτος 1 στην εκπεμπόμενη αρμονική.
+ * • Τετράγωνο: μόνο περιττές αρμονικές με πλάτος 1/n· άρτιες = 0.
+ */
+export function harmonicAmplitude(n: number, w: Waveform): number {
+  if (w === "sine") return 1
+  return n % 2 === 1 ? 1 / n : 0
+}
+
+export const SQUARE_BANDS: BandDef[] = [
   { label: "~50 MHz", target: 50e6, criterion: "2dec" },
   { label: "~230 MHz", target: 230e6, criterion: "firstdec0" },
   { label: "~1 GHz", target: 1e9, criterion: "lastdig0" },
@@ -136,6 +165,19 @@ export const BANDS: BandDef[] = [
   { label: "~6 GHz", target: 6e9, criterion: "lastdig0" },
   { label: "★ Βέλτιστος", target: null, criterion: "optimal" },
 ]
+
+/** Ζώνες ημιτόνου: μόνος στόχος ~55 MHz (κριτήριο 2 δεκαδικών) + βέλτιστος (≤60 MHz). */
+export const SINE_BANDS: BandDef[] = [
+  { label: "~55 MHz", target: SINE_TARGET_HZ, criterion: "2dec" },
+  { label: "★ Βέλτιστος", target: null, criterion: "optimal" },
+]
+
+export function bandsForWaveform(w: Waveform): BandDef[] {
+  return w === "sine" ? SINE_BANDS : SQUARE_BANDS
+}
+
+/** Προεπιλεγμένες ζώνες (τετράγωνο) — διατηρείται για συμβατότητα. */
+export const BANDS: BandDef[] = SQUARE_BANDS
 
 export function satisfiesCriterion(f: number, criterion: Criterion): boolean {
   switch (criterion) {
@@ -150,22 +192,59 @@ export function satisfiesCriterion(f: number, criterion: Criterion): boolean {
   }
 }
 
+export interface HarmonicSearchOpts {
+  /** Περιορισμός σε περιττές αρμονικές (φάσμα τετραγώνου). */
+  oddOnly?: boolean
+  /** Ανώτατη επιτρεπτή συχνότητα (φυσικό όριο γεννήτριας). */
+  maxHz?: number
+}
+
+const isOdd = (n: number) => n % 2 === 1
+
+/** Πλησιέστερη αρμονική n ώστε f0·n ≈ target, με το κριτήριο ζώνης, τους
+ *  προαιρετικούς περιορισμούς (μόνο περιττές / οροφή συχνότητας). Επιστρέφει
+ *  null όταν καμία επιτρεπτή αρμονική δεν χωρά κάτω από το maxHz. */
 export function findNearestHarmonic(
   f0: number,
   targetHz: number,
   criterion: Criterion,
-): { n: number; f: number } {
-  if (f0 <= 0 || targetHz <= 0) return { n: 1, f: f0 }
-  const n0 = Math.max(1, Math.round(targetHz / f0))
-  if (criterion === "2dec") return { n: n0, f: f0 * n0 }
+  opts: HarmonicSearchOpts = {},
+): { n: number; f: number } | null {
+  const { oddOnly = false, maxHz = Number.POSITIVE_INFINITY } = opts
+  if (f0 <= 0 || targetHz <= 0) return null
+  if (f0 > maxHz) return null // ούτε η θεμελιώδης δεν χωρά
+  const nMax = Math.floor(maxHz / f0)
+  const allowed = (n: number) => n >= 1 && n <= nMax && (!oddOnly || isOdd(n))
+
+  // «2dec»: κάθε αρμονική ικανοποιεί το κριτήριο → πάρε την πλησιέστερη επιτρεπτή.
+  if (criterion === "2dec") {
+    const n0 = Math.max(1, Math.round(targetHz / f0))
+    const candidates: number[] = []
+    for (let dn = 0; dn <= 3; dn++) candidates.push(n0 + dn, n0 - dn)
+    let bestN: number | null = null
+    let bestDist = Number.POSITIVE_INFINITY
+    for (const n of candidates) {
+      if (!allowed(n)) continue
+      const dist = Math.abs(f0 * n - targetHz)
+      if (dist < bestDist) {
+        bestDist = dist
+        bestN = n
+      }
+    }
+    // fallback: μεγαλύτερη επιτρεπτή αρμονική κάτω από το όριο
+    if (bestN === null) bestN = oddOnly ? (isOdd(nMax) ? nMax : nMax - 1) : nMax
+    if (bestN < 1) return null
+    return { n: bestN, f: f0 * bestN }
+  }
 
   const WINDOW = 250
+  const n0 = Math.max(1, Math.round(targetHz / f0))
   let bestN: number | null = null
   let bestDist = Number.POSITIVE_INFINITY
   for (let dn = 0; dn <= WINDOW; dn++) {
     const candidates = dn === 0 ? [n0] : [n0 + dn, n0 - dn]
     for (const n of candidates) {
-      if (n < 1) continue
+      if (!allowed(n)) continue
       const f = f0 * n
       if (satisfiesCriterion(f, criterion)) {
         const dist = Math.abs(f - targetHz)
@@ -177,7 +256,7 @@ export function findNearestHarmonic(
     }
     if (bestN !== null && dn > 15) break
   }
-  return bestN !== null ? { n: bestN, f: f0 * bestN } : { n: n0, f: f0 * n0 }
+  return bestN !== null ? { n: bestN, f: f0 * bestN } : null
 }
 
 /* ============================================================
@@ -258,24 +337,28 @@ export function findOptimalCombo(
   mat: Material,
   thicknessMm: number,
   soilEpsR = 10,
+  opts: HarmonicSearchOpts = {},
 ): { n: number; f: number; score: number } | null {
-  if (f0 <= 0) return null
+  const { oddOnly = false, maxHz = 10e9 } = opts
+  if (f0 <= 0 || f0 > maxHz) return null
   const t = thicknessMm / 1000
+  const nMax = Math.floor(maxHz / f0)
 
   let fOpt = 1e3
   if (t > 0 && mat.sigma > 0 && mat.muR > 0) {
     fOpt = 1 / (Math.PI * MU0 * mat.muR * mat.sigma * t * t)
   }
-  fOpt = Math.max(f0, Math.min(10e9, fOpt))
+  fOpt = Math.max(f0, Math.min(maxHz, fOpt))
 
   const n0 = Math.max(1, Math.round(fOpt / f0))
   const WINDOW = 1500
-  let bestN = n0
+  let bestN: number | null = null
   let bestScore = Number.NEGATIVE_INFINITY
 
   for (let dn = -WINDOW; dn <= WINDOW; dn++) {
     const n = n0 + dn
-    if (n < 1) continue
+    if (n < 1 || n > nMax) continue
+    if (oddOnly && !isOdd(n)) continue
     const f = f0 * n
     const omega = 2 * Math.PI * f
     const dSoil = sigmaSoil > 0 ? Math.sqrt(2 / (omega * MU0 * sigmaSoil)) : 0

@@ -7,7 +7,12 @@ import {
   REFRACTION_SOILS,
   PRESETS,
   getPreset,
-  BANDS,
+  bandsForWaveform,
+  waveformMaxHz,
+  harmonicAmplitude,
+  SINE_MAX_HZ,
+  SQUARE_MAX_HZ,
+  type Waveform,
   getMaterial,
   getUnitRef,
   effectiveRadiusMm,
@@ -62,6 +67,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
 
   // Material / harmonics
   const [materialId, setMaterialId] = useState("au197")
+  const [waveform, setWaveform] = useState<Waveform>("square")
   const [maxharm, setMaxharm] = useState(8)
   const [selectedN, setSelectedN] = useState(1)
   const [unitMultiplier, setUnitMultiplier] = useState(1)
@@ -112,6 +118,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
         if (typeof s.bSource === "string") setBSource(s.bSource)
         if (s.geomag && typeof s.geomag === "object") setGeomag(s.geomag)
         if (typeof s.materialId === "string") setMaterialId(s.materialId)
+        if (s.waveform === "sine" || s.waveform === "square") setWaveform(s.waveform)
         if (Number.isFinite(s.maxharm)) setMaxharm(s.maxharm)
         if (Number.isFinite(s.selectedN)) setSelectedN(s.selectedN)
         if (Number.isFinite(s.unitMultiplier)) setUnitMultiplier(s.unitMultiplier)
@@ -144,7 +151,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
         STATE_KEY,
         JSON.stringify({
           lat, lon, elev, date, bfield, bSource, geomag,
-          materialId, maxharm, selectedN, unitMultiplier,
+          materialId, waveform, maxharm, selectedN, unitMultiplier,
           soilType, sigmaCustom, targetDepth,
           sec6Soil, sec6Theta, sec6H, dipoleAxis,
           generatorLat, generatorLon, generatorFrequency, generatorBandLabel,
@@ -201,30 +208,44 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
 
   const f0fmt = fmtFrequency(f0)
 
-  // Harmonics rows
+  const waveMaxHz = waveformMaxHz(waveform)
+  const oddOnly = waveform === "square"
+
+  // Harmonics rows — ανάλογα με τον τύπο εκπομπής:
+  // • Ημίτονο: καθαρός τόνος· απαριθμούνται οι αρμονικές που «χωρούν» ≤ 60 MHz
+  //   (υποψήφιοι συντονισμοί), όλες σε πλήρες πλάτος.
+  // • Τετράγωνο: μόνο περιττές αρμονικές (n = 1, 3, 5, …) με σχετικό πλάτος 1/n,
+  //   έως τα 8 GHz.
   const harmonics = useMemo(() => {
-    const rows = []
-    for (let i = 1; i <= maxharm; i++) {
+    const rows: { n: number; f: number; amp: number; dSoil: number; dMetal: number }[] = []
+    const step = oddOnly ? 2 : 1
+    let count = 0
+    for (let i = 1; count < maxharm; i += step) {
       const f = f0 * i
+      if (f > waveMaxHz) break
       rows.push({
         n: i,
         f,
+        amp: harmonicAmplitude(i, waveform),
         dSoil: skinDepth(f, sigmaSoil),
         dMetal: skinDepth(f, mat.sigma, mat.muR),
       })
+      count++
     }
     return rows
-  }, [f0, maxharm, sigmaSoil, mat])
+  }, [f0, maxharm, sigmaSoil, mat, waveform, oddOnly, waveMaxHz])
 
-  // Bands
+  // Bands — waveform-aware: το ημίτονο κρατά μόνο τη ζώνη ~55 MHz + βέλτιστο (≤60 MHz),
+  // το τετράγωνο κρατά όλες τις ζώνες με μόνο περιττές αρμονικές (≤8 GHz).
   const bands = useMemo(() => {
     if (f0 <= 0) return []
-    return BANDS.map((band) => {
+    const searchOpts = { oddOnly, maxHz: waveMaxHz }
+    return bandsForWaveform(waveform).map((band) => {
       const result =
         band.criterion === "optimal"
-          ? findOptimalCombo(f0, sigmaSoil, mat, rMm)
-          : findNearestHarmonic(f0, band.target as number, band.criterion)
-      if (!result) return null
+          ? findOptimalCombo(f0, sigmaSoil, mat, rMm, 10, searchOpts)
+          : findNearestHarmonic(f0, band.target as number, band.criterion, searchOpts)
+      if (!result || result.f > waveMaxHz) return null
       const f = result.f
       return {
         label: band.label,
@@ -666,6 +687,44 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
         title="Αρμονικές"
         desc="Ακέ��αια πολλαπλάσια της θεμελιώδο��ς συχνότητας. Κάνε κλικ σε γραμμή του φάσματος για επιλογή αρμονικής."
       >
+        <div className="mb-4">
+          <p className="mb-2 font-mono text-[0.72rem] uppercase tracking-wide text-muted-foreground">
+            Τύπος εκπομπής γεννήτριας
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setWaveform("sine")}
+              className={
+                "rounded-sm border px-3 py-2 font-mono text-[0.78rem] transition-colors " +
+                (waveform === "sine"
+                  ? "border-phosphor bg-secondary/50 text-phosphor"
+                  : "border-panel-line text-muted-foreground hover:bg-secondary/20")
+              }
+            >
+              Ημίτονο (Sine)
+              <span className="ml-2 text-[0.66rem] text-muted-foreground">≤ 60 MHz</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setWaveform("square")}
+              className={
+                "rounded-sm border px-3 py-2 font-mono text-[0.78rem] transition-colors " +
+                (waveform === "square"
+                  ? "border-phosphor bg-secondary/50 text-phosphor"
+                  : "border-panel-line text-muted-foreground hover:bg-secondary/20")
+              }
+            >
+              Τετράγωνο (Square)
+              <span className="ml-2 text-[0.66rem] text-muted-foreground">≤ 8 GHz</span>
+            </button>
+          </div>
+          <p className="mt-2 font-mono text-[0.68rem] leading-relaxed text-muted-foreground">
+            {waveform === "sine"
+              ? "Καθαρός τόνος: μία αρμονική, πλήρες πλάτος, οροφή 60 MHz. Στόχος συντονισμού ~55 MHz."
+              : "Φάσμα Fourier: μόνο περιττές αρμονικές (n = 1, 3, 5, …) με σχετικό πλάτος ~1/n, οροφή 8 GHz."}
+          </p>
+        </div>
         <Field label="Πλήθος εμφανιζόμενων αρμονικών (n)" htmlFor="maxharm">
           <input
             id="maxharm"
@@ -677,13 +736,14 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
             onChange={(e) => setMaxharm(Math.max(2, Math.min(16, Number.parseInt(e.target.value) || 8)))}
           />
         </Field>
-        <Spectrum count={maxharm} active={selectedN} onSelect={setSelectedN} />
+        <Spectrum bars={harmonics.map((h) => ({ n: h.n, amp: h.amp }))} active={selectedN} onSelect={setSelectedN} />
         <div className="mt-4 overflow-x-auto">
           <table className="w-full font-mono text-sm">
             <thead>
               <tr className="text-left text-[0.72rem] uppercase tracking-wide text-muted-foreground">
                 <th className="border-b border-panel-line px-2.5 py-2">n</th>
                 <th className="border-b border-panel-line px-2.5 py-2">Συχνότητα (Hz)</th>
+                <th className="border-b border-panel-line px-2.5 py-2">Πλάτος (~1/n)</th>
                 <th className="border-b border-panel-line px-2.5 py-2">δ έδαφος · δ μέταλλο</th>
               </tr>
             </thead>
@@ -700,6 +760,9 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
                 >
                   <td className={"border-b border-panel-line px-2.5 py-2 " + (h.n === 1 ? "text-phosphor" : "")}>n={h.n}</td>
                   <td className={"border-b border-panel-line px-2.5 py-2 " + (h.n === 1 ? "text-phosphor" : "")}>{fmtHzOnly(h.f)}</td>
+                  <td className="border-b border-panel-line px-2.5 py-2 text-brass">
+                    {h.amp.toFixed(3)}
+                  </td>
                   <td className="border-b border-panel-line px-2.5 py-2 text-muted-foreground">
                     {fmtLength(h.dSoil)} · {fmtLength(h.dMetal)}
                   </td>
