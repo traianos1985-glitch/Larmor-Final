@@ -6,10 +6,11 @@ import { Calculator } from "@/components/larmor/calculator"
 const TABS = [
   { id: "calc" as const, label: "Υπολογισμός", hint: "Larmor · αρμονικές · διάθλαση" },
   { id: "mapping" as const, label: "Χαρτογράφηση & Τριγωνισμός", hint: "§7 · §8 · §9 · §10" },
+  { id: "upgrades" as const, label: "Αναβαθμίσεις ακρίβειας", hint: "∂x/∂f · sweeping · consensus" },
 ]
 
 export default function Page() {
-  const [tab, setTab] = useState<"calc" | "mapping">("calc")
+  const [tab, setTab] = useState<"calc" | "mapping" | "upgrades">("calc")
 
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-5 px-4 py-6 md:px-6 md:py-10">

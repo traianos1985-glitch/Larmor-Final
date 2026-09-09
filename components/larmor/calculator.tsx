@@ -56,8 +56,9 @@ import { ExportButtons } from "./export-buttons"
 import { TriangulationPanel } from "./triangulation-panel"
 import { SuspectSitesPanel } from "./suspect-sites-panel"
 import { CachingToolsPanel } from "./caching-tools"
+import { UpgradesPanel } from "./upgrades-panel"
 
-export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
+export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" | "upgrades" }) {
   // Location / field
   const [lat, setLat] = useState(37.9838)
   const [lon, setLon] = useState(23.7275)
@@ -334,7 +335,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
   const chartData = harmonics.map((h) => ({ n: h.n, soil: h.dSoil, metal: h.dMetal }))
 
   // Section 6 refraction — η κύρια γραμμή υπολογίζεται στη συχνότητα εκπομπής (fSelected).
-  // Ο πίνακας δείχνει και τις υπόλοιπες ομαδ������ποιημένες ζώνες για σύγκριση.
+  // Ο πίνακας δείχνει και τις υπόλοιπες ομαδ��������ποιημένες ζώνες για σύγκριση.
   const refraction = useMemo(() => {
     const [epsStr, sigStr] = sec6Soil.split("|")
     const epsilon_r = Number.parseFloat(epsStr)
@@ -527,7 +528,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
 
       {tab === "mapping" && (
         <>
-      <Panel step="7" title="Τελική χαρτογράφηση & πειραματική εκτίμηση θέσης" desc="Αφού επιλέξεις υλικό, πεδίο και συχνότητα, κ��τέ��ραψε τη γεννήτρια και το σημείο που δείχνουν οι βέργες. Η απόσταση και η διόπτευση είναι πειραματικές εκτιμήσεις.">
+      <Panel step="7" title="Τελική χαρτογράφηση & πειραματική εκτίμηση θέσης" desc="Αφού επιλέξεις υλικό, πεδίο και συχνότητ��, κ��τέ��ραψε τη γεννήτρια και το σημείο που δείχνουν οι βέργες. Η απόσταση και η διόπτευση είναι πειραματικές εκτιμήσεις.">
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Γεννήτρια · πλάτος" htmlFor="generator-lat" warn={validateLat(generatorLat)}><input id="generator-lat" type="number" step="0.000001" min={-90} max={90} className={inputClass} value={generatorLat} onChange={(e) => applyGeneratorLat(Number.parseFloat(e.target.value) || 0)} /></Field>
@@ -645,6 +646,27 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
       <CachingToolsPanel targetLat={estimatedTarget.lat} targetLon={estimatedTarget.lon} />
   </>
   )}
+
+      {tab === "upgrades" && (
+        <UpgradesPanel
+          f0={f0}
+          fSelected={fSelected}
+          selectedBandLabel={generatorFrequencyIsAuto ? (selectedBand?.label ?? null) : "χειροκίνητο"}
+          bands={bands.map((b) => ({ label: b.label, n: b.n, f: b.f }))}
+          params={{
+            epsilonR: refraction.epsilon_r,
+            refractionSigma: refraction.sigma,
+            mineralizationSigma: sigmaSoil,
+            theta1Deg: sec6Theta,
+            hM: sec6H,
+            targetDepthM: targetDepth,
+            rMm,
+            matSigma: mat.sigma,
+            matMuR: mat.muR,
+            soilEpsR,
+          }}
+        />
+      )}
 
       {tab === "calc" && (
         <>
