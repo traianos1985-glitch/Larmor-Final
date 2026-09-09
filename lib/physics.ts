@@ -86,7 +86,11 @@ export function effectiveRadiusMm(mat: Material, units: number): number {
    (Math.abs στο B — αρνητικό μέτρο πεδίου δεν έχει φυσικό νόημα)
 ------------------------------------------------------------ */
 export function larmorHz(gamma: number, bMicroT: number): number {
-  return gamma * Math.abs(bMicroT || 0)
+  // γ is expressed in MHz/T while B is expressed in µT; the 10⁶ factors cancel,
+  // but keeping the conversion explicit prevents unit mistakes for isotope values.
+  const gammaHzPerT = gamma * 1e6
+  const bTesla = Math.abs(bMicroT || 0) * 1e-6
+  return gammaHzPerT * bTesla
 }
 
 export function skinDepth(f: number, sigma: number, muR = 1): number {
@@ -332,7 +336,7 @@ export function findOptimalCombo(
     const metalResp = isFinite(dMetal) && dMetal > 0 && t > 0 ? 1 - Math.exp(-t / dMetal) : 0
     // Fresnel: πόσο ανακλάται στη διεπαφή εδάφους→μετάλλου (ισχύς).
     const reflR = fresnelReflection(mat.sigma, mat.muR, sigmaSoil, soilEpsR, f)
-    // Πλή��ης ανακλαστική απόκριση = αδιαφάνεια × ανακλαστικότητα Fresnel.
+    // Πλή����ης ανακλαστική απόκριση = αδιαφάνεια × ανακλαστικότητα Fresnel.
     const score = dSoil * metalResp * reflR
     if (score > bestScore) {
       bestScore = score
@@ -632,7 +636,7 @@ export const REFRACTION_SOILS = [
      αγκυρωμένο στους διακριτούς τύπους εδάφους της εφαρμογής.
 
    Οι τιμές «κουμπώνουν» στους υπάρχοντες τύπους (SOIL_TYPES /
-   REFRACTION_SOILS) ώστε να τροφοδο��ούν απευθείας τα ίδια selects.
+   REFRACTION_SOILS) ώστε να τροφο��ο��ούν απευθείας τα ίδια selects.
 ============================================================ */
 export function soilMoisturePermittivity(vwc: number): number {
   const t = Math.max(0, Math.min(0.6, vwc))
