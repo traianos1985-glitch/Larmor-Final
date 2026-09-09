@@ -167,7 +167,7 @@ export const WAVEFORMS: WaveformDef[] = [
 export function harmonicAmplitude(waveform: Waveform, n: number): number {
   if (n < 1) return 0
   if (waveform === "sine") return n === 1 ? 1 : 0
-  // Τετράγωνο: σειρά Fourier — μόνο περιττές αρμονικές, πλάτος 1/n.
+  // Τετράγωνο: σειρά Fourier — ��όνο περιττές αρμονικές, πλάτος 1/n.
   return n % 2 === 1 ? 1 / n : 0
 }
 
@@ -633,7 +633,7 @@ export const REFRACTION_SOILS = [
          ε_r = 3.03 + 9.3·θ + 146·θ² − 76.7·θ³
    • σ αυξάνει μονότονα με την υγρασία (νερό + διαλυμένα άλατα άγουν το
      ρεύμα). Χρησιμοποιείται προσεγγιστικό μοντέλο τύπου νόμου δύναμης
-     αγκυρωμένο στους διακριτούς τύπους εδάφους της εφαρμογής.
+     αγκυρ��μένο στους διακριτούς τύπους εδάφους της εφαρμογής.
 
    Οι τιμές «κουμπώνουν» στους υπάρχοντες τύπους (SOIL_TYPES /
    REFRACTION_SOILS) ώστε να τροφο��ο��ούν απευθείας τα ίδια selects.
@@ -828,7 +828,7 @@ export function validateBField(v: number): string | null {
 export function validateDepth(v: number): string | null {
   if (!Number.isFinite(v)) return "Απαιτείται αριθμός."
   if (v < 0) return "Το βάθος δεν μπορεί να είναι αρνητικό."
-  if (v > 50) return "Μη ρεαλιστικά μεγάλο βάθος (>50 m)."
+  if (v > 50) return "Μη ρεαλιστικά μ��γάλο βάθος (>50 m)."
   return null
 }
 
@@ -1302,5 +1302,177 @@ export function triangulate(stations: TriStation[], angularUncertaintyDeg = 3): 
     qualityScore,
     qualityGrade,
     qualityParts: { angle: angleScore, ellipse: ellipseScore, convergence: convergenceScore },
+  }
+}
+
+/* ============================================================
+   ΑΝΑΒΑΘΜΙΣΗ ΑΚΡΙΒΕΙΑΣ ΣΥΧΝΟΤΗΤΑΣ (Frequency Precision)
+   ------------------------------------------------------------
+   ΚΑΘΑΡΑ ΠΡΟΣΘΕΤΙΚΟ: δεν αλλάζει καμία υπάρχουσα συνάρτηση
+   (findOptimalCombo, computeMeasurementQuality, computeSnell…).
+   Οι δύο συναρτήσεις παρακάτω δουλεύουν πάνω σε ήδη υπολογισμένα
+   δείγματα x_total(f) και βγάζουν:
+
+   1) positionalSensitivity(): το ∂x_total/∂f σε κάθε συχνότητα —
+      πόσο μετακινείται η εκτίμηση θέσης αν αστοχήσει λίγο η f.
+      Η πιο «ακριβής» συχνότητα δεν είναι η δυνατότερη, αλλά το
+      στάσιμο σημείο όπου η καμπύλη είναι πιο επίπεδη.
+
+   2) frequencyConsensus(): αντί για single-pick, εύρωστη σύνθεση
+      πολλών συχνοτήτων — σταθμισμένος διάμεσος του x_total (κόβει
+      τα artifacts), κεντρική συχνότητα στο πιο επίπεδο σημείο και
+      εύρος sweep σε Hz (το «plateau» όπου η θέση μένει σταθερή).
+============================================================ */
+
+/** Ένα δείγμα σάρωσης συχνότητας: συχνότητα f, εκτίμηση θέσης x_total (m)
+ *  και βάρος εμπιστοσύνης (π.χ. rEff × καθαρότητα ορυκτοποίησης). */
+export interface FreqSample {
+  n: number
+  f: number
+  x: number
+  weight: number
+}
+
+/** Δείγμα με τοπική ευαισθησία θέσης στη συχνότητα. */
+export interface SensitivitySample extends FreqSample {
+  /** ∂x/∂f σε m/Hz */
+  dxdf: number
+  /** ∂x/∂f σε m/MHz (πιο ευανάγνωστο) */
+  dxdfPerMHz: number
+  /** Δείκτης σταθερότητας θέσης ∈ (0,1]: 1/(1+|∂x/∂f|·f) — 1 = τέλεια επίπεδο */
+  stability: number
+}
+
+/** Αριθμητικό ∂x_total/∂f (κεντρική διαφορά σε μη-ομοιόμορφο πλέγμα f).
+ *  Ο δείκτης σταθερότητας κλιμακώνεται με τη συχνότητα ώστε να είναι
+ *  αδιάστατος: |∂x/∂f|·f ≈ σχετική μετατόπιση θέσης ανά σχετική αλλαγή f. */
+export function positionalSensitivity(samples: FreqSample[]): SensitivitySample[] {
+  const pts = [...samples].filter((s) => Number.isFinite(s.f) && Number.isFinite(s.x)).sort((a, b) => a.f - b.f)
+  const out: SensitivitySample[] = []
+  for (let i = 0; i < pts.length; i++) {
+    const cur = pts[i]
+    let dxdf = 0
+    if (pts.length >= 2) {
+      if (i === 0) {
+        const nx = pts[1]
+        dxdf = (nx.x - cur.x) / (nx.f - cur.f || 1)
+      } else if (i === pts.length - 1) {
+        const pv = pts[i - 1]
+        dxdf = (cur.x - pv.x) / (cur.f - pv.f || 1)
+      } else {
+        const pv = pts[i - 1]
+        const nx = pts[i + 1]
+        dxdf = (nx.x - pv.x) / (nx.f - pv.f || 1)
+      }
+    }
+    const stability = 1 / (1 + Math.abs(dxdf) * cur.f)
+    out.push({ ...cur, dxdf, dxdfPerMHz: dxdf * 1e6, stability })
+  }
+  return out
+}
+
+export interface FrequencyConsensusResult {
+  /** Σταθμισμένος διάμεσος του x_total (m) — εύρωστος στα artifacts */
+  robustX: number
+  /** Κεντρική/βασική προτεινόμενη συχνότητα εκπομπής (Hz) = πιο επίπεδο σημείο */
+  centerF: number
+  centerN: number
+  /** Όρια του σταθερού παραθύρου sweep (Hz) */
+  sweepLowF: number
+  sweepHighF: number
+  /** Ολικό εύρος sweep f_high − f_low (Hz) */
+  sweepSpanHz: number
+  /** Ημι-εύρος γύρω από την κεντρική συχνότητα (± Hz) */
+  sweepHalfWidthHz: number
+  /** true αν το x_total(f) είναι μονότονο — αλλιώς σηκώνεται flag διόπτευσης */
+  monotonic: boolean
+  /** Δείκτης συμφωνίας ∈ [0,1]: κλάσμα βάρους μέσα στην ανοχή γύρω από τον διάμεσο */
+  consensusScore: number
+  /** Ανοχή θέσης (m) που ορίζει το «σταθερό» παράθυρο */
+  toleranceM: number
+  samples: SensitivitySample[]
+}
+
+/** Σταθμισμένος διάμεσος. Αν όλα τα βάρη είναι ~0, πέφτει σε απλό (αστάθμιστο)
+ *  διάμεσο ώστε να μη γυρίζει NaN όταν η απόκριση μετάλλου είναι αμελητέα. */
+function weightedMedian(pairs: { v: number; w: number }[]): number {
+  const positive = pairs.filter((p) => Number.isFinite(p.v) && p.w > 0)
+  const arr = (positive.length ? positive : pairs.filter((p) => Number.isFinite(p.v)).map((p) => ({ v: p.v, w: 1 }))).sort(
+    (a, b) => a.v - b.v,
+  )
+  if (!arr.length) return Number.NaN
+  const total = arr.reduce((a, p) => a + p.w, 0)
+  let acc = 0
+  for (const p of arr) {
+    acc += p.w
+    if (acc >= total / 2) return p.v
+  }
+  return arr[arr.length - 1].v
+}
+
+/**
+ * Εύρωστη πολυσυχνοτική σύνθεση. Παίρνει δείγματα x_total(f) με βάρη και:
+ *  • υπολογίζει τον σταθμισμένο διάμεσο (κόβει outliers τύπου 5,5 m / 3,1 m),
+ *  • ορίζει ανοχή θέσης (default: 15% του |διαμέσου| ή 0,15 m),
+ *  • βρίσκει την κεντρική συχνότητα στο πιο επίπεδο σημείο (min |∂x/∂f|) μέσα
+ *    στη ζώνη ανοχής, και το συνεχές παράθυρο sweep γύρω της,
+ *  • ελέγχει μονοτονικότητα (guard → τροφοδοσία triangulation).
+ */
+export function frequencyConsensus(samples: FreqSample[], toleranceM?: number): FrequencyConsensusResult | null {
+  const sens = positionalSensitivity(samples)
+  if (!sens.length) return null
+
+  const robustX = weightedMedian(sens.map((s) => ({ v: s.x, w: Math.max(0, s.weight) })))
+  const base = Number.isFinite(robustX) ? Math.abs(robustX) : 0
+  const tol = toleranceM ?? Math.max(0.15, base * 0.15)
+
+  // Δείγματα μέσα στη ζώνη ανοχής γύρω από τον διάμεσο = «συναινετικά».
+  const inBand = sens.filter((s) => Math.abs(s.x - robustX) <= tol)
+  const pool = inBand.length ? inBand : sens
+
+  // Κεντρική συχνότητα: το πιο επίπεδο σημείο (μεγαλύτερη σταθερότητα) μέσα στη ζώνη.
+  let center = pool[0]
+  for (const s of pool) if (s.stability > center.stability) center = s
+
+  // Συνεχές παράθυρο sweep: επεκτείνεται γύρω από το κέντρο όσο μένουμε στη ζώνη ανοχής.
+  const sorted = [...sens].sort((a, b) => a.f - b.f)
+  const ci = sorted.findIndex((s) => s.f === center.f)
+  let lo = ci
+  let hi = ci
+  while (lo - 1 >= 0 && Math.abs(sorted[lo - 1].x - robustX) <= tol) lo--
+  while (hi + 1 < sorted.length && Math.abs(sorted[hi + 1].x - robustX) <= tol) hi++
+  const sweepLowF = sorted[lo].f
+  const sweepHighF = sorted[hi].f
+  const sweepSpanHz = Math.max(0, sweepHighF - sweepLowF)
+  const sweepHalfWidthHz = Math.max(center.f - sweepLowF, sweepHighF - center.f)
+
+  // Μονοτονικότητα του x_total(f): αν σπάει, το πεδίο είναι κοντινό/ασταθές.
+  let monoUp = true
+  let monoDown = true
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i].x < sorted[i - 1].x - 1e-9) monoUp = false
+    if (sorted[i].x > sorted[i - 1].x + 1e-9) monoDown = false
+  }
+  const monotonic = monoUp || monoDown
+
+  const totalW = sens.reduce((a, s) => a + Math.max(0, s.weight), 0)
+  const bandW = inBand.reduce((a, s) => a + Math.max(0, s.weight), 0)
+  // Όταν η απόκριση μετάλλου είναι αμελητέα (βάρη ~0), το σταθμισμένο κλάσμα
+  // είναι απροσδιόριστο· πέφτουμε σε αστάθμιστο κλάσμα δειγμάτων εντός ανοχής.
+  const consensusScore =
+    totalW > 1e-12 ? bandW / totalW : sens.length ? inBand.length / sens.length : 0
+
+  return {
+    robustX,
+    centerF: center.f,
+    centerN: center.n,
+    sweepLowF,
+    sweepHighF,
+    sweepSpanHz,
+    sweepHalfWidthHz,
+    monotonic,
+    consensusScore,
+    toleranceM: tol,
+    samples: sens,
   }
 }

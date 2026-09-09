@@ -56,8 +56,9 @@ import { ExportButtons } from "./export-buttons"
 import { TriangulationPanel } from "./triangulation-panel"
 import { SuspectSitesPanel } from "./suspect-sites-panel"
 import { CachingToolsPanel } from "./caching-tools"
+import { FrequencyPrecision } from "./frequency-precision"
 
-export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
+export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" | "precision" }) {
   // Location / field
   const [lat, setLat] = useState(37.9838)
   const [lon, setLon] = useState(23.7275)
@@ -221,7 +222,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
   const f0fmt = fmtFrequency(f0)
 
   // Harmonics rows — το πλάτος/παρουσία κάθε αρμονικής εξαρτάται από την κυματομορφή
-  // εκπομπής (ημίτονο: μόνο n=1· τετράγωνο: περιττές, πλάτος 1/n).
+  // εκπομπής (ημίτονο: μόνο n=1· τετράγωνο: περ��ττές, πλάτος 1/n).
   const harmonics = useMemo(() => {
     const rows = []
     for (let i = 1; i <= maxharm; i++) {
@@ -334,7 +335,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
   const chartData = harmonics.map((h) => ({ n: h.n, soil: h.dSoil, metal: h.dMetal }))
 
   // Section 6 refraction — η κύρια γραμμή υπολογίζεται στη συχνότητα εκπομπής (fSelected).
-  // Ο πίνακας δείχνει και τις υπόλοιπες ομαδ������ποιημένες ζώνες για σύγκριση.
+  // Ο πίνακας δείχνει και τις υπόλοιπες ομαδ��������ποιημένες ζώνες για σύγκριση.
   const refraction = useMemo(() => {
     const [epsStr, sigStr] = sec6Soil.split("|")
     const epsilon_r = Number.parseFloat(epsStr)
@@ -645,6 +646,22 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" }) {
       <CachingToolsPanel targetLat={estimatedTarget.lat} targetLon={estimatedTarget.lon} />
   </>
   )}
+
+      {tab === "precision" && (
+        <FrequencyPrecision
+          f0={f0}
+          centerHintF={fSelected}
+          epsilon_r={refraction.epsilon_r}
+          sigma={refraction.sigma}
+          sigmaSoil={sigmaSoil}
+          soilEpsR={soilEpsR}
+          theta1Deg={sec6Theta}
+          sec6H={sec6H}
+          targetDepth={targetDepth}
+          mat={mat}
+          rMm={rMm}
+        />
+      )}
 
       {tab === "calc" && (
         <>
