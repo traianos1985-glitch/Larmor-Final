@@ -20,6 +20,22 @@ export const MU0 = 4 * Math.PI * 1e-7 // H/m — μαγνητική διαπερ
 // (= 8.8541878128e-12 F/m, CODATA 2018).
 export const EPSILON_0 = 1 / (MU0 * C * C) // F/m
 
+// Όρια γεννήτριας WB-SG1: CH1 1 Hz–250 MHz (ανάλυση 1 Hz), CH2 35 MHz–8 GHz (ανάλυση 10 Hz).
+export const GENERATOR_MAX_HZ = 8e9
+export const GENERATOR_CH1_MAX_HZ = 250e6
+
+/**
+ * Μπορεί η γεννήτρια WB-SG1 να παράγει τη συχνότητα f (Hz) με σφάλμα ≤ ανάλυσης;
+ * • ≤ 250 MHz (CH1, ανάλυση 1 Hz): η f πρέπει να απέχει < 0.1 Hz από ακέραιο Hz.
+ * • > 250 MHz (CH2, ανάλυση 10 Hz): η f πρέπει να απέχει ≤ 0.5 Hz από πολλαπλάσιο των 10 Hz.
+ * Όρια: 1 Hz … 8 GHz.
+ */
+export function generatorCanSet(f: number): boolean {
+  if (!(f >= 1) || f > GENERATOR_MAX_HZ) return false
+  if (f <= GENERATOR_CH1_MAX_HZ) return Math.abs(f - Math.round(f)) < 0.1
+  return Math.round(f) % 10 === 0
+}
+
 export interface Material {
   id: string
   name: string
@@ -86,11 +102,9 @@ export function effectiveRadiusMm(mat: Material, units: number): number {
    (Math.abs στο B — αρνητικό μέτρο πεδίου δεν έχει φυσικό νόημα)
 ------------------------------------------------------------ */
 export function larmorHz(gamma: number, bMicroT: number): number {
-  // γ is expressed in MHz/T while B is expressed in µT; the 10⁶ factors cancel,
-  // but keeping the conversion explicit prevents unit mistakes for isotope values.
-  const gammaHzPerT = gamma * 1e6
-  const bTesla = Math.abs(bMicroT || 0) * 1e-6
-  return gammaHzPerT * bTesla
+  // γ [MHz/T] × B [µT] = f [Hz] ΑΚΡΙΒΩΣ, καθώς οι παράγοντες 10⁶ και 10⁻⁶ απλοποιούνται.
+  // Ένας μόνος πολλαπλασιασμός double αποφεύγει ενδιάμεσες στρογγυλοποιήσεις.
+  return gamma * Math.abs(bMicroT || 0)
 }
 
 export function skinDepth(f: number, sigma: number, muR = 1): number {
@@ -107,7 +121,7 @@ export function fmtFrequency(hz: number): { val: string; unit: string } {
 }
 
 export function fmtHzOnly(hz: number): string {
-  return hz.toLocaleString("el-GR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " Hz"
+  return hz.toLocaleString("el-GR", { minimumFractionDigits: 2, maximumFractionDigits: 10 }) + " Hz"
 }
 
 export function fmtLength(m: number): string {
@@ -183,6 +197,7 @@ export function satisfiesCriterion(f: number, criterion: Criterion): boolean {
     case "firstdec0":
       return f % 1 < 0.1
     case "lastdig0":
+      // Η ανάλυση 10 Hz αντιστοιχεί σε απόσταση έως 0.5 Hz από πολλαπλάσιο των 10 Hz.
       return Math.round(f) % 10 === 0
     default:
       return true
@@ -318,17 +333,20 @@ export function findOptimalCombo(
   if (t > 0 && mat.sigma > 0 && mat.muR > 0) {
     fOpt = 1 / (Math.PI * MU0 * mat.muR * mat.sigma * t * t)
   }
-  fOpt = Math.max(f0, Math.min(10e9, fOpt))
+  fOpt = Math.max(f0, Math.min(GENERATOR_MAX_HZ, fOpt))
 
   const n0 = Math.max(1, Math.round(fOpt / f0))
   const WINDOW = 1500
   let bestN = isAllowed(n0) ? n0 : 1
   let bestScore = Number.NEGATIVE_INFINITY
+  let usableN: number | null = null
+  let usableScore = Number.NEGATIVE_INFINITY
 
   for (let dn = -WINDOW; dn <= WINDOW; dn++) {
     const n = n0 + dn
     if (n < 1 || !isAllowed(n)) continue
     const f = f0 * n
+    if (f > GENERATOR_MAX_HZ) continue
     const omega = 2 * Math.PI * f
     const dSoil = sigmaSoil > 0 ? Math.sqrt(2 / (omega * MU0 * sigmaSoil)) : 0
     const dMetal =
@@ -342,7 +360,12 @@ export function findOptimalCombo(
       bestScore = score
       bestN = n
     }
+    if (score > usableScore && generatorCanSet(f)) {
+      usableScore = score
+      usableN = n
+    }
   }
+  if (usableN !== null) return { n: usableN, f: f0 * usableN, score: usableScore }
   return { n: bestN, f: f0 * bestN, score: bestScore }
 }
 
@@ -437,7 +460,7 @@ export function fmtBandFrequency(f: number, criterion: Criterion): string {
   try {
     switch (criterion) {
       case "2dec":
-        return f.toLocaleString("el-GR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " Hz"
+        return f.toLocaleString("el-GR", { minimumFractionDigits: 2, maximumFractionDigits: 10 }) + " Hz"
       case "firstdec0":
         return f.toLocaleString("el-GR", { minimumFractionDigits: 7, maximumFractionDigits: 10 }) + " Hz"
       case "lastdig0":
@@ -654,7 +677,7 @@ export function soilMoistureConductivity(vwc: number): number {
 }
 
 export interface SoilClassification {
-  /** Ογκομετρική υγρασία θ (m³/m³) */
+  /** Ογκομετρική υγρα��ία θ (m³/m³) */
   vwc: number
   /** Εκτιμώμενη αγωγιμότητα σ (S/m) */
   sigma: number
