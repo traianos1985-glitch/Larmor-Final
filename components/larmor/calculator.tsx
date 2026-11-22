@@ -406,7 +406,7 @@ export function Calculator({ tab = "calc" }: { tab?: "calc" | "mapping" | "upgra
   )
 
   function handleBResult(uT: number, source: string) {
-    setBfield(Number(uT.toFixed(4)))
+    setBfield(uT)
     setBSource(source)
   }
 
